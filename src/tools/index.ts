@@ -30,7 +30,7 @@ export const registerAllTools = () => {
   // Register combined database operation tool
   server.tool(
     "notion_database",
-    "Perform various database operations (create, query, update)",
+    "Perform various database operations (create, query, compact table reads, aggregate, summarize, update)",
     DATABASE_OPERATION_SCHEMA,
     registerDatabaseOperationTool
   );

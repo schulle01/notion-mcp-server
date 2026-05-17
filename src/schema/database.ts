@@ -402,6 +402,180 @@ export const QUERY_DATABASE_SCHEMA = {
     .describe("Number of results to return (1-100)"),
 };
 
+const DATABASE_WHERE_SCHEMA: z.ZodTypeAny = z.lazy(() =>
+  z.union([
+    z.object({
+      property: z.string().describe("Database property name or property ID"),
+      op: z
+        .enum([
+          "equals",
+          "does_not_equal",
+          "contains",
+          "does_not_contain",
+          "starts_with",
+          "ends_with",
+          "greater_than",
+          "less_than",
+          "greater_than_or_equal_to",
+          "less_than_or_equal_to",
+          "before",
+          "after",
+          "on_or_before",
+          "on_or_after",
+          "is_empty",
+          "is_not_empty",
+        ])
+        .describe("Type-aware comparison operator"),
+      value: z.any().optional().describe("Comparison value. Omit for is_empty and is_not_empty."),
+    }),
+    z.object({
+      and: z.array(DATABASE_WHERE_SCHEMA).min(1).describe("All nested filters must match"),
+    }),
+    z.object({
+      or: z.array(DATABASE_WHERE_SCHEMA).min(1).describe("At least one nested filter must match"),
+    }),
+  ])
+);
+
+const DATABASE_ORDER_BY_SCHEMA = z.object({
+  property: z.string().optional().describe("Database property name or property ID"),
+  timestamp: z
+    .enum(["created_time", "last_edited_time"])
+    .optional()
+    .describe("Timestamp sort key"),
+  direction: z.enum(["ascending", "descending"]).describe("Sort direction"),
+});
+
+const DATABASE_TABLE_COMMON_SCHEMA = {
+  database_id: z.string().describe("The ID of the database to query"),
+  where: z
+    .preprocess(preprocessJson, DATABASE_WHERE_SCHEMA)
+    .optional()
+    .describe("Structured, type-aware filter DSL. Prefer this over raw filter JSON."),
+  filter: z
+    .preprocess(preprocessJson, z.any())
+    .optional()
+    .describe("Raw Notion filter JSON escape hatch"),
+  order_by: z.array(DATABASE_ORDER_BY_SCHEMA).optional().describe("Sort criteria"),
+  max_pages: z
+    .number()
+    .int()
+    .min(1)
+    .max(1000)
+    .optional()
+    .describe("Safety limit for internal pagination"),
+};
+
+export const INSPECT_DATABASE_COMPACT_SCHEMA = {
+  database_id: z.string().describe("The ID of the database to inspect"),
+};
+
+export const VALIDATE_DATABASE_QUERY_SCHEMA = {
+  ...DATABASE_TABLE_COMMON_SCHEMA,
+  select: z.array(z.string()).optional().describe("Properties that would be selected"),
+};
+
+export const QUERY_DATABASE_TABLE_SCHEMA = {
+  ...DATABASE_TABLE_COMMON_SCHEMA,
+  select: z
+    .array(z.string())
+    .optional()
+    .describe("Property names or IDs to return. Omit to return all properties, which is less token efficient."),
+  cursor: z.string().optional().describe("Cursor for pagination"),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(500)
+    .optional()
+    .default(25)
+    .describe("Maximum rows to return"),
+  include_page_url: z.boolean().optional().default(false).describe("Include Notion page URLs"),
+  max_string_length: z
+    .number()
+    .int()
+    .min(20)
+    .max(5000)
+    .optional()
+    .describe("Maximum string length per returned property"),
+};
+
+export const LIST_DATABASE_ROW_REFS_SCHEMA = {
+  ...DATABASE_TABLE_COMMON_SCHEMA,
+  key_properties: z
+    .array(z.string())
+    .optional()
+    .describe("Small identifying properties to include with each row reference"),
+  sample_properties: z
+    .array(z.string())
+    .optional()
+    .describe("Small sample properties to include with each row reference"),
+  cursor: z.string().optional().describe("Cursor for pagination"),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(500)
+    .optional()
+    .default(50)
+    .describe("Maximum row references to return"),
+  include_page_url: z.boolean().optional().default(false).describe("Include Notion page URLs"),
+};
+
+export const GET_DATABASE_ROWS_BY_IDS_SCHEMA = {
+  database_id: z.string().describe("The ID of the database whose schema should be used"),
+  page_ids: z.array(z.string()).min(1).max(100).describe("Page IDs to retrieve"),
+  select: z.array(z.string()).optional().describe("Property names or IDs to return"),
+  include_page_url: z.boolean().optional().default(false).describe("Include Notion page URLs"),
+  max_string_length: z
+    .number()
+    .int()
+    .min(20)
+    .max(5000)
+    .optional()
+    .describe("Maximum string length per returned property"),
+};
+
+export const MATCH_DATABASE_ROWS_SCHEMA = {
+  ...DATABASE_TABLE_COMMON_SCHEMA,
+  query: z.string().min(1).describe("Case-insensitive substring to find in searchable properties"),
+  search_properties: z
+    .array(z.string())
+    .optional()
+    .describe("Property names or IDs to search. Omit to scan all searchable properties."),
+  key_properties: z.array(z.string()).optional().describe("Small identifying properties to include"),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(500)
+    .optional()
+    .default(100)
+    .describe("Maximum matching row references to return"),
+};
+
+export const AGGREGATE_DATABASE_TABLE_SCHEMA = {
+  ...DATABASE_TABLE_COMMON_SCHEMA,
+  group_by: z
+    .array(z.string())
+    .max(3)
+    .optional()
+    .describe("Property names or IDs to group by. Omit for a pure count."),
+};
+
+export const SUMMARIZE_DATABASE_TABLE_SCHEMA = {
+  ...DATABASE_TABLE_COMMON_SCHEMA,
+  properties: z.array(z.string()).optional().describe("Property names or IDs to summarize"),
+  top_values_limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .optional()
+    .default(10)
+    .describe("Maximum top values per property"),
+};
+
 // Update database schema
 export const UPDATE_DATABASE_SCHEMA = {
   database_id: z.string().describe("The ID of the database to update"),
@@ -452,6 +626,54 @@ export const DATABASE_OPERATION_SCHEMA = {
         }),
         z.object({
           action: z
+            .literal("inspect_database_compact")
+            .describe("Use this action to inspect a database schema in a compact form."),
+          params: z.object(INSPECT_DATABASE_COMPACT_SCHEMA),
+        }),
+        z.object({
+          action: z
+            .literal("validate_database_query")
+            .describe("Use this action to validate structured table-query inputs before execution."),
+          params: z.object(VALIDATE_DATABASE_QUERY_SCHEMA),
+        }),
+        z.object({
+          action: z
+            .literal("query_database_table")
+            .describe("Use this action to query a database as compact projected rows."),
+          params: z.object(QUERY_DATABASE_TABLE_SCHEMA),
+        }),
+        z.object({
+          action: z
+            .literal("list_database_row_refs")
+            .describe("Use this action to list compact row references without full page payloads."),
+          params: z.object(LIST_DATABASE_ROW_REFS_SCHEMA),
+        }),
+        z.object({
+          action: z
+            .literal("get_database_rows_by_ids")
+            .describe("Use this action to retrieve selected properties for known page IDs."),
+          params: z.object(GET_DATABASE_ROWS_BY_IDS_SCHEMA),
+        }),
+        z.object({
+          action: z
+            .literal("match_database_rows")
+            .describe("Use this action to scan searchable properties and return compact matching row references."),
+          params: z.object(MATCH_DATABASE_ROWS_SCHEMA),
+        }),
+        z.object({
+          action: z
+            .literal("aggregate_database_table")
+            .describe("Use this action to count or group rows without returning row payloads."),
+          params: z.object(AGGREGATE_DATABASE_TABLE_SCHEMA),
+        }),
+        z.object({
+          action: z
+            .literal("summarize_database_table")
+            .describe("Use this action to summarize property coverage and top values without returning full rows."),
+          params: z.object(SUMMARIZE_DATABASE_TABLE_SCHEMA),
+        }),
+        z.object({
+          action: z
             .literal("update_database")
             .describe("Use this action to update a database."),
           params: z.object(UPDATE_DATABASE_SCHEMA),
@@ -459,6 +681,6 @@ export const DATABASE_OPERATION_SCHEMA = {
       ])
     )
     .describe(
-      "A union of all possible database operations. Each operation has a specific action and corresponding parameters. Use this schema to validate the input for database operations such as creating, querying, and updating databases. Available actions include: 'create_database', 'query_database', and 'update_database'. Each operation requires specific parameters as defined in the corresponding schemas."
+      "A union of all possible database operations. Each operation has a specific action and corresponding parameters. Available actions include: 'create_database', 'query_database', 'inspect_database_compact', 'validate_database_query', 'query_database_table', 'list_database_row_refs', 'get_database_rows_by_ids', 'match_database_rows', 'aggregate_database_table', 'summarize_database_table', and 'update_database'. Each operation requires specific parameters as defined in the corresponding schemas."
     ),
 };

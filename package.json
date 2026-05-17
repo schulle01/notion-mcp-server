@@ -7,6 +7,7 @@
   },
   "scripts": {
     "build": "tsc && shx chmod +x build/*.js",
+    "test": "npm run build && node --test build/query/*.test.js",
     "prepare": "npm run build",
     "watch": "tsc --watch",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js -e NOTION_TOKEN=your_notion_token -e NOTION_PAGE_ID=your_notion_page_id"

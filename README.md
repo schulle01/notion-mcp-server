@@ -185,13 +185,17 @@ Example operations:
 A powerful tool for database interactions including:
 - Creating new databases with custom properties
 - Querying databases with filters and sorting
+- Inspecting database schemas in a compact form
+- Querying projected table rows without full page payloads
+- Listing compact row references and matching rows by searchable values
+- Counting, grouping, and summarizing rows without returning all row data
 - Updating database structure and properties
 
 Example operations:
 ```javascript
 {
   "payload": {
-    "action": "create_database", // One of: "create_database", "query_database", "update_database"
+    "action": "create_database", // One of: "create_database", "query_database", "inspect_database_compact", "validate_database_query", "query_database_table", "list_database_row_refs", "get_database_rows_by_ids", "match_database_rows", "aggregate_database_table", "summarize_database_table", "update_database"
     "params": {
       // Parameters specific to the chosen action
     }
@@ -305,4 +309,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
