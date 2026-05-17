@@ -544,6 +544,11 @@ export const MATCH_DATABASE_ROWS_SCHEMA = {
     .optional()
     .describe("Property names or IDs to search. Omit to scan all searchable properties."),
   key_properties: z.array(z.string()).optional().describe("Small identifying properties to include"),
+  include_snippets: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Include short values from matched properties. Defaults to false for token-efficient ID search."),
   limit: z
     .number()
     .int()

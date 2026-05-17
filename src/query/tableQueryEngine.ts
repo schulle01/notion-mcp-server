@@ -242,7 +242,7 @@ export async function matchDatabaseRows(adapter: DatabaseAdapter, params: MatchR
     }
 
     if (matchedProperties.length > 0) {
-      const ref = buildRowRef(row, properties, params.key_properties, matchedProperties, false);
+      const ref = buildRowRef(row, properties, params.key_properties, params.include_snippets ? matchedProperties : undefined, false);
       ref.matched_properties = matchedProperties;
       matches.push(ref);
     }

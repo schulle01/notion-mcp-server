@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseAdapter } from "./notionDatabaseAdapter.js";
-import { aggregateDatabaseTable, getDatabaseRowsByIds, queryDatabaseTable } from "./tableQueryEngine.js";
+import { aggregateDatabaseTable, getDatabaseRowsByIds, matchDatabaseRows, queryDatabaseTable } from "./tableQueryEngine.js";
 
 const database = {
   id: "db1",
@@ -70,6 +70,36 @@ test("aggregateDatabaseTable groups compact values", async () => {
     { key: { Status: "Ready" }, count: 1 },
     { key: { Status: "Manual" }, count: 1 },
   ]);
+});
+
+test("matchDatabaseRows returns compact refs without snippets by default", async () => {
+  const result = await matchDatabaseRows(adapter, {
+    database_id: "db1",
+    query: "PO",
+    key_properties: ["Task"],
+  });
+
+  assert.equal(result.matched_total, 1);
+  assert.deepEqual(result.rows, [
+    {
+      page_id: "page1",
+      title: "Plan PO step",
+      last_edited_time: "2026-05-17T10:00:00.000Z",
+      key: { Task: "Plan PO step" },
+      matched_properties: ["Task"],
+    },
+  ]);
+});
+
+test("matchDatabaseRows includes snippets only when requested", async () => {
+  const result = await matchDatabaseRows(adapter, {
+    database_id: "db1",
+    query: "PO",
+    key_properties: ["Task"],
+    include_snippets: true,
+  });
+
+  assert.deepEqual(result.rows[0].sample, { Task: "Plan PO step" });
 });
 
 test("getDatabaseRowsByIds rejects pages outside the requested database", async () => {
