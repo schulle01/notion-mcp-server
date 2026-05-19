@@ -9,7 +9,7 @@ export async function archivePage(
   try {
     const response = await notion.pages.update({
       page_id: params.pageId,
-      archived: true,
+      in_trash: true,
     });
 
     return {
@@ -31,7 +31,7 @@ export async function restorePage(
   try {
     const response = await notion.pages.update({
       page_id: params.pageId,
-      archived: false,
+      in_trash: false,
     });
 
     return {
