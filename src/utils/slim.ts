@@ -58,7 +58,7 @@ export function extractTitle(
 // them — keeps the response tight for sparsely populated rows.
 type FileRefContext = { pageId: string; property: string };
 
-function flattenProperty(
+export function flattenProperty(
   prop: PageObjectResponse["properties"][string],
   ctx?: FileRefContext
 ): unknown {
