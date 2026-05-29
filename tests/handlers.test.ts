@@ -277,6 +277,213 @@ describe("query_database", () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────
+// database analysis ops
+// ────────────────────────────────────────────────────────────────────────
+
+const titleProp = (text: string) => ({
+  id: "title",
+  type: "title",
+  title: [{ plain_text: text }],
+});
+
+const selectProp = (name: string | null) => ({
+  id: "select",
+  type: "select",
+  select: name ? { name } : null,
+});
+
+const numberProp = (n: number | null) => ({
+  id: "number",
+  type: "number",
+  number: n,
+});
+
+const pageRow = (id: string, properties: Record<string, unknown>, url = `https://notion.so/${id}`) => ({
+  object: "page",
+  id,
+  url,
+  properties,
+});
+
+describe("database analysis ops", () => {
+  it("query_database_table returns selected-property projections only", async () => {
+    notionStub.dataSources.query.mockResolvedValue({
+      object: "list",
+      results: [
+        pageRow("p-1", {
+          Name: titleProp("First"),
+          Status: selectProp("Done"),
+          Points: numberProp(3),
+        }),
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    const res = await dispatch("query_database_table", {
+      data_source_id: "ds-1",
+      select: ["Name", "Status"],
+    });
+
+    expect((res as { ok: boolean }).ok).toBe(true);
+    const data = (res as { data: { results: Array<{ properties: Record<string, unknown> }> } }).data;
+    expect(data.results[0].properties).toEqual({ Name: "First", Status: "Done" });
+    expect(data.results[0].properties).not.toHaveProperty("Points");
+    expect(notionStub.dataSources.query).toHaveBeenCalledWith(
+      expect.objectContaining({ data_source_id: "ds-1", page_size: 100 })
+    );
+  });
+
+  it("aggregate_database_table supports count-only output without row payloads", async () => {
+    notionStub.dataSources.query.mockResolvedValue({
+      object: "list",
+      results: [
+        pageRow("p-1", { Name: titleProp("A") }),
+        pageRow("p-2", { Name: titleProp("B") }),
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    const res = await dispatch("aggregate_database_table", { data_source_id: "ds-1" });
+    expect(res).toMatchObject({ ok: true, data: { count: 2 } });
+    expect((res as { data: Record<string, unknown> }).data).not.toHaveProperty("results");
+  });
+
+  it("aggregate_database_table supports grouped counts", async () => {
+    notionStub.dataSources.query.mockResolvedValue({
+      object: "list",
+      results: [
+        pageRow("p-1", { Status: selectProp("Done") }),
+        pageRow("p-2", { Status: selectProp("Open") }),
+        pageRow("p-3", { Status: selectProp("Done") }),
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    const res = await dispatch("aggregate_database_table", {
+      data_source_id: "ds-1",
+      group_by: ["Status"],
+    });
+
+    const groups = (res as { data: { groups: Array<{ group: Record<string, unknown>; count: number }> } }).data.groups;
+    expect(groups).toEqual([
+      { group: { Status: "Done" }, count: 2 },
+      { group: { Status: "Open" }, count: 1 },
+    ]);
+  });
+
+  it("summarize_database_table reports top values and empty counts", async () => {
+    notionStub.dataSources.query.mockResolvedValue({
+      object: "list",
+      results: [
+        pageRow("p-1", { Status: selectProp("Done") }),
+        pageRow("p-2", { Status: selectProp("Done") }),
+        pageRow("p-3", { Status: selectProp(null) }),
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    const res = await dispatch("summarize_database_table", {
+      data_source_id: "ds-1",
+      select: ["Status"],
+    });
+
+    const status = (res as {
+      data: {
+        properties: {
+          Status: { present: number; empty: number; top_values: Array<{ value: unknown; count: number }> };
+        };
+      };
+    }).data.properties.Status;
+    expect(status.present).toBe(2);
+    expect(status.empty).toBe(1);
+    expect(status.top_values[0]).toMatchObject({ value: "Done", count: 2 });
+  });
+
+  it("paginates database table scans and reports truncation metadata", async () => {
+    notionStub.dataSources.query
+      .mockResolvedValueOnce({
+        object: "list",
+        results: [pageRow("p-1", { Name: titleProp("A") })],
+        has_more: true,
+        next_cursor: "cur-1",
+      })
+      .mockResolvedValueOnce({
+        object: "list",
+        results: [pageRow("p-2", { Name: titleProp("B") })],
+        has_more: true,
+        next_cursor: "cur-2",
+      });
+
+    const res = await dispatch("query_database_table", {
+      data_source_id: "ds-1",
+      limit: 2,
+      max_pages: 2,
+      page_size: 1,
+    });
+
+    const data = (res as { data: { results: unknown[]; truncated: boolean; next_cursor: string; metadata: { api_calls: number } } }).data;
+    expect(data.results).toHaveLength(2);
+    expect(data.truncated).toBe(true);
+    expect(data.next_cursor).toBe("cur-2");
+    expect(data.metadata.api_calls).toBe(2);
+    expect(notionStub.dataSources.query).toHaveBeenLastCalledWith(
+      expect.objectContaining({ start_cursor: "cur-1", page_size: 1 })
+    );
+  });
+
+  it("rejects where/filter mutual exclusion and unknown fields for new operations", async () => {
+    const both = await dispatch("query_database_table", {
+      data_source_id: "ds-1",
+      where: { Status: "Done" },
+      filter: { property: "Status", select: { equals: "Done" } },
+    });
+    expect((both as { ok: boolean }).ok).toBe(false);
+    expect((both as { error: { code: string } }).error.code).toBe("validation_error");
+
+    const unknown = await dispatch("query_database_table", {
+      data_source_id: "ds-1",
+      select: ["Name"],
+      group_by: ["Status"],
+    });
+    expect((unknown as { ok: boolean }).ok).toBe(false);
+    expect((unknown as { error: { code: string } }).error.code).toBe("validation_error");
+    expect(notionStub.dataSources.query).not.toHaveBeenCalled();
+  });
+
+  it("list_database_row_refs returns compact row references", async () => {
+    notionStub.dataSources.query.mockResolvedValue({
+      object: "list",
+      results: [pageRow("p-1", { Name: titleProp("First"), Status: selectProp("Done") })],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    const res = await dispatch("list_database_row_refs", {
+      data_source_id: "ds-1",
+      select: ["Status"],
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      data: {
+        results: [
+          {
+            page_id: "p-1",
+            page_url: "https://notion.so/p-1",
+            title: "First",
+            properties: { Status: "Done" },
+          },
+        ],
+      },
+    });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
 // Data-source ops
 // ────────────────────────────────────────────────────────────────────────
 

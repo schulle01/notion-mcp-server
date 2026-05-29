@@ -54,7 +54,7 @@ function extractTitle(
 // Flatten a single Notion property to a primitive (or small object) the LLM
 // can read directly. Returns undefined for empty values so the caller can skip
 // them — keeps the response tight for sparsely populated rows.
-function flattenProperty(
+export function flattenProperty(
   prop: PageObjectResponse["properties"][string]
 ): unknown {
   switch (prop.type) {
