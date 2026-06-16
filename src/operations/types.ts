@@ -21,10 +21,12 @@ export type OperationName =
   | "batch_mixed_blocks"
   | "create_database"
   | "query_database"
+  | "inspect_database_compact"
   | "query_database_table"
   | "aggregate_database_table"
   | "summarize_database_table"
   | "list_database_row_refs"
+  | "match_database_rows"
   | "update_database"
   | "list_data_sources"
   | "get_data_source"
@@ -46,6 +48,17 @@ export type OperationName =
   | "upload_file"
   | "list_file_uploads"
   | "get_file_upload";
+
+export type OperationAccess = "read" | "write";
+
+export type OperationDomain =
+  | "pages"
+  | "blocks"
+  | "databases"
+  | "data_sources"
+  | "comments"
+  | "users"
+  | "files";
 
 export type OperationResult<T = unknown> =
   | { ok: true; data: T }
@@ -83,6 +96,12 @@ export type OperationDef<TParams = unknown, TResult = unknown> = {
   schema: ZodType<TParams>;
   handler: (params: TParams) => Promise<OperationResult<TResult>>;
   batchable: boolean;
+  /** Whether the operation mutates Notion state. `read` ops are side-effect free. */
+  access: OperationAccess;
+  /** The Notion resource family this operation belongs to. */
+  domain: OperationDomain;
+  /** Removes or hides content (trash/archive/delete). Defaults to false. */
+  destructive?: boolean;
   example: unknown;
   exampleBatch?: unknown;
   rollback?: RollbackFn;
