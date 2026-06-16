@@ -15,6 +15,11 @@ const notionStub = {
     retrieve: vi.fn(),
     update: vi.fn(),
   },
+  views: {
+    list: vi.fn(),
+    retrieve: vi.fn(),
+    update: vi.fn(),
+  },
   pages: {
     move: vi.fn(),
     retrieveMarkdown: vi.fn(),
@@ -576,6 +581,329 @@ describe("update_data_source", () => {
       data_source_id: "ds-1",
       archived: true,
     });
+  });
+
+  it("forwards property rename-only payloads and verifies the new name", async () => {
+    notionStub.dataSources.update.mockResolvedValue({ id: "ds-1", properties: {} });
+    notionStub.dataSources.retrieve.mockResolvedValue({
+      object: "data_source",
+      id: "ds-1",
+      url: "https://notion.so/ds-1",
+      title: [],
+      description: [],
+      parent: { type: "database_id", database_id: "db-1" },
+      properties: {
+        Phase: { id: "%7CcNF", type: "select" },
+      },
+    });
+
+    const res = await dispatch("update_data_source", {
+      data_source_id: "ds-1",
+      properties: {
+        "Pipeline-Stufe": { name: "Phase" },
+      },
+    });
+
+    expect((res as { ok: boolean }).ok).toBe(true);
+    expect(notionStub.dataSources.update).toHaveBeenCalledWith({
+      data_source_id: "ds-1",
+      properties: {
+        "Pipeline-Stufe": { name: "Phase" },
+      },
+    });
+    expect(notionStub.dataSources.retrieve).toHaveBeenCalledWith({ data_source_id: "ds-1" });
+  });
+
+  it("preserves name on typed property updates instead of stripping it", async () => {
+    notionStub.dataSources.update.mockResolvedValue({ id: "ds-1", properties: {} });
+    notionStub.dataSources.retrieve.mockResolvedValue({
+      object: "data_source",
+      id: "ds-1",
+      url: "https://notion.so/ds-1",
+      title: [],
+      description: [],
+      parent: { type: "database_id", database_id: "db-1" },
+      properties: {
+        Phase: { id: "%7CcNF", type: "select" },
+      },
+    });
+
+    const res = await dispatch("update_data_source", {
+      data_source_id: "ds-1",
+      properties: {
+        "%7CcNF": {
+          type: "select",
+          select: {
+            options: [{ id: "opt-1", name: "Discovery", color: "gray" }],
+          },
+          name: "Phase",
+        },
+      },
+    });
+
+    expect((res as { ok: boolean }).ok).toBe(true);
+    expect(notionStub.dataSources.update).toHaveBeenCalledWith({
+      data_source_id: "ds-1",
+      properties: {
+        "%7CcNF": {
+          type: "select",
+          select: {
+            options: [{ id: "opt-1", name: "Discovery", color: "gray" }],
+          },
+          name: "Phase",
+        },
+      },
+    });
+  });
+
+  it("returns rename_not_verified when Notion accepts but schema does not show the new name", async () => {
+    notionStub.dataSources.update.mockResolvedValue({ id: "ds-1", properties: {} });
+    notionStub.dataSources.retrieve.mockResolvedValue({
+      object: "data_source",
+      id: "ds-1",
+      properties: {
+        "Pipeline-Stufe": { id: "%7CcNF", type: "select" },
+      },
+    });
+
+    const res = await dispatch("update_data_source", {
+      data_source_id: "ds-1",
+      properties: {
+        "Pipeline-Stufe": { name: "Phase" },
+      },
+    });
+
+    expect((res as { ok: boolean }).ok).toBe(false);
+    expect((res as { error: { code: string } }).error.code).toBe("rename_not_verified");
+  });
+});
+
+describe("rename_data_source_property", () => {
+  it("renames one property by name and verifies it", async () => {
+    notionStub.dataSources.update.mockResolvedValue({ id: "ds-1", properties: {} });
+    notionStub.dataSources.retrieve.mockResolvedValue({
+      object: "data_source",
+      id: "ds-1",
+      properties: {
+        Phase: { id: "%7CcNF", type: "select" },
+      },
+    });
+
+    const res = await dispatch("rename_data_source_property", {
+      data_source_id: "ds-1",
+      property: "Pipeline-Stufe",
+      name: "Phase",
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      data: {
+        data_source_id: "ds-1",
+        property: "Pipeline-Stufe",
+        name: "Phase",
+        verified: true,
+      },
+    });
+    expect(notionStub.dataSources.update).toHaveBeenCalledWith({
+      data_source_id: "ds-1",
+      properties: {
+        "Pipeline-Stufe": { name: "Phase" },
+      },
+    });
+  });
+
+  it("accepts encoded property IDs and verifies against the decoded Notion ID", async () => {
+    notionStub.dataSources.update.mockResolvedValue({ id: "ds-1", properties: {} });
+    notionStub.dataSources.retrieve.mockResolvedValue({
+      object: "data_source",
+      id: "ds-1",
+      properties: {
+        Phase: { id: "|cNF", type: "select" },
+      },
+    });
+
+    const res = await dispatch("rename_data_source_property", {
+      data_source_id: "ds-1",
+      property: "%7CcNF",
+      name: "Phase",
+    });
+
+    expect((res as { ok: boolean }).ok).toBe(true);
+    expect(notionStub.dataSources.update).toHaveBeenCalledWith({
+      data_source_id: "ds-1",
+      properties: {
+        "%7CcNF": { name: "Phase" },
+      },
+    });
+  });
+});
+
+describe("view operations", () => {
+  it("lists views for a data source", async () => {
+    notionStub.views.list.mockResolvedValue({
+      object: "list",
+      results: [{ object: "view", id: "view-1" }],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    const res = await dispatch("list_views", {
+      data_source_id: "ds-1",
+    });
+
+    expect((res as { ok: boolean }).ok).toBe(true);
+    expect(notionStub.views.list).toHaveBeenCalledWith({ data_source_id: "ds-1" });
+  });
+
+  it("retrieves one view", async () => {
+    notionStub.views.retrieve.mockResolvedValue({
+      object: "view",
+      id: "view-1",
+      name: "Main",
+      type: "table",
+      data_source_id: "ds-1",
+      configuration: {
+        type: "table",
+        properties: [{ property_id: "prop-a", visible: true }],
+      },
+    });
+
+    const res = await dispatch("get_view", {
+      view_id: "view-1",
+    });
+
+    expect((res as { ok: boolean }).ok).toBe(true);
+    expect(notionStub.views.retrieve).toHaveBeenCalledWith({ view_id: "view-1" });
+  });
+
+  it("merges view property visibility and verifies the result", async () => {
+    notionStub.views.retrieve
+      .mockResolvedValueOnce({
+        object: "view",
+        id: "view-1",
+        name: "Main",
+        type: "table",
+        configuration: {
+          type: "table",
+          properties: [
+            { property_id: "prop-a", visible: true, width: 180 },
+            { property_id: "prop-b", visible: true, width: 120 },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        object: "view",
+        id: "view-1",
+        name: "Main",
+        type: "table",
+        configuration: {
+          type: "table",
+          properties: [
+            { property_id: "prop-a", visible: false, width: 180 },
+            { property_id: "prop-b", visible: true, width: 120 },
+          ],
+        },
+      });
+
+    const res = await dispatch("configure_view_properties", {
+      view_id: "view-1",
+      properties: [{ property_id: "prop-a", visible: false }],
+    });
+
+    expect((res as { ok: boolean }).ok).toBe(true);
+    expect(notionStub.views.update).toHaveBeenCalledWith({
+      view_id: "view-1",
+      configuration: {
+        type: "table",
+        properties: [
+          { property_id: "prop-a", visible: false, width: 180 },
+          { property_id: "prop-b", visible: true, width: 120 },
+        ],
+      },
+    });
+  });
+
+  it("replaces view property order when mode is replace", async () => {
+    notionStub.views.retrieve
+      .mockResolvedValueOnce({
+        object: "view",
+        id: "view-1",
+        name: "Main",
+        type: "table",
+        configuration: {
+          type: "table",
+          properties: [
+            { property_id: "prop-a", visible: true },
+            { property_id: "prop-b", visible: true },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        object: "view",
+        id: "view-1",
+        name: "Main",
+        type: "table",
+        configuration: {
+          type: "table",
+          properties: [
+            { property_id: "prop-b", visible: true },
+            { property_id: "prop-a", visible: false },
+          ],
+        },
+      });
+
+    const res = await dispatch("configure_view_properties", {
+      view_id: "view-1",
+      mode: "replace",
+      properties: [
+        { property_id: "prop-b", visible: true },
+        { property_id: "prop-a", visible: false },
+      ],
+    });
+
+    expect((res as { ok: boolean }).ok).toBe(true);
+    expect(notionStub.views.update).toHaveBeenCalledWith({
+      view_id: "view-1",
+      configuration: {
+        type: "table",
+        properties: [
+          { property_id: "prop-b", visible: true },
+          { property_id: "prop-a", visible: false },
+        ],
+      },
+    });
+  });
+
+  it("returns view_properties_not_verified when Notion accepts but the view does not reflect the change", async () => {
+    notionStub.views.retrieve
+      .mockResolvedValueOnce({
+        object: "view",
+        id: "view-1",
+        name: "Main",
+        type: "table",
+        configuration: {
+          type: "table",
+          properties: [{ property_id: "prop-a", visible: true }],
+        },
+      })
+      .mockResolvedValueOnce({
+        object: "view",
+        id: "view-1",
+        name: "Main",
+        type: "table",
+        configuration: {
+          type: "table",
+          properties: [{ property_id: "prop-a", visible: true }],
+        },
+      });
+
+    const res = await dispatch("configure_view_properties", {
+      view_id: "view-1",
+      properties: [{ property_id: "prop-a", visible: false }],
+    });
+
+    expect((res as { ok: boolean }).ok).toBe(false);
+    expect((res as { error: { code: string } }).error.code).toBe("view_properties_not_verified");
   });
 });
 

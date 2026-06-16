@@ -4,7 +4,7 @@ import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
 import { slimDataSource } from "../utils/slim.js";
-import { DATABASE_PROPERTY_SCHEMA } from "../schema/database.js";
+import { DATA_SOURCE_PROPERTY_UPDATE_SCHEMA } from "../schema/database.js";
 import { asSdk, type UpdateDataSourceBody } from "../utils/notion-types.js";
 
 const VERBOSE = z.boolean().optional();
@@ -41,6 +41,74 @@ const GetDataSourceParams = z.object({
   verbose: VERBOSE,
 });
 
+function decodePropertyRef(ref: string): string {
+  try {
+    return decodeURIComponent(ref);
+  } catch {
+    return ref;
+  }
+}
+
+function getDataSourceProperties(ds: unknown): Record<string, unknown> {
+  if (typeof ds !== "object" || ds === null) return {};
+  const properties = (ds as { properties?: unknown }).properties;
+  if (typeof properties !== "object" || properties === null) return {};
+  return properties as Record<string, unknown>;
+}
+
+function propertyId(property: unknown): string | undefined {
+  if (typeof property !== "object" || property === null) return undefined;
+  const id = (property as { id?: unknown }).id;
+  return typeof id === "string" ? id : undefined;
+}
+
+function matchesPropertyRef(currentName: string, property: unknown, ref: string): boolean {
+  const decodedRef = decodePropertyRef(ref);
+  const id = propertyId(property);
+  return currentName === ref || currentName === decodedRef || id === ref || id === decodedRef;
+}
+
+function findPropertyByRef(
+  properties: Record<string, unknown>,
+  ref: string
+): { currentName: string; id?: string } | undefined {
+  for (const [currentName, property] of Object.entries(properties)) {
+    if (matchesPropertyRef(currentName, property, ref)) {
+      return { currentName, id: propertyId(property) };
+    }
+  }
+  return undefined;
+}
+
+function collectRenameRequests(
+  properties: Record<string, unknown> | undefined
+): { property: string; name: string }[] {
+  if (!properties) return [];
+  return Object.entries(properties).flatMap(([property, config]) => {
+    if (typeof config !== "object" || config === null) return [];
+    const name = (config as { name?: unknown }).name;
+    return typeof name === "string" && name.length > 0 ? [{ property, name }] : [];
+  });
+}
+
+async function verifyRenameRequests(
+  data_source_id: string,
+  renames: { property: string; name: string }[]
+): Promise<{ ok: true; dataSource: unknown } | { ok: false; property: string; name: string }> {
+  const notion = await getClient();
+  const ds = await notion.dataSources.retrieve({ data_source_id });
+  const properties = getDataSourceProperties(ds);
+  for (const rename of renames) {
+    const byNewName = findPropertyByRef(properties, rename.name);
+    const byOriginalRef = findPropertyByRef(properties, rename.property);
+    if (byNewName && (!byOriginalRef || byOriginalRef.currentName === rename.name || byOriginalRef.id === byNewName.id)) {
+      continue;
+    }
+    return { ok: false, ...rename };
+  }
+  return { ok: true, dataSource: ds };
+}
+
 register({
   name: "get_data_source",
   description: "Retrieve a single data source's schema (its property definitions and parent database).",
@@ -58,7 +126,7 @@ register({
 const UpdateDataSourceParams = z.object({
   data_source_id: z.string(),
   title: z.array(z.unknown()).optional().describe("Rich text array for the data source title."),
-  properties: z.record(z.string(), DATABASE_PROPERTY_SCHEMA).optional(),
+  properties: z.record(z.string(), DATA_SOURCE_PROPERTY_UPDATE_SCHEMA).optional(),
   icon: z.unknown().optional(),
   archived: z.boolean().optional(),
   in_trash: z.boolean().optional(),
@@ -67,17 +135,19 @@ const UpdateDataSourceParams = z.object({
 
 register({
   name: "update_data_source",
-  description: "Update a data source's schema (properties, title, icon). For database-level metadata use update_database.",
+  description: "Update a data source's schema (properties, title, icon). Property updates may include name for renames. For database-level metadata use update_database.",
   batchable: true,
   schema: UpdateDataSourceParams,
   example: {
     data_source_id: "<data-source-id>",
     properties: {
+      "Old property name or ID": { name: "New property name" },
       Status: { type: "status", status: { options: [] } },
     },
   },
   handler: tryHandler(async ({ data_source_id, title, properties, icon, archived, in_trash, verbose }) => {
     const notion = await getClient();
+    const renames = collectRenameRequests(properties);
     const body = {
       data_source_id,
       ...(title !== undefined ? { title } : {}),
@@ -87,6 +157,81 @@ register({
       ...(in_trash !== undefined ? { in_trash } : {}),
     };
     const response = await notion.dataSources.update(asSdk<UpdateDataSourceBody>(body));
-    return { ok: true, data: slimDataSource(response, verbose ?? false) };
+    let data = response;
+    if (renames.length > 0) {
+      const verified = await verifyRenameRequests(data_source_id, renames);
+      if (!verified.ok) {
+        return {
+          ok: false,
+          error: {
+            code: "rename_not_verified",
+            message: `Notion accepted update_data_source, but property "${verified.property}" was not verified as "${verified.name}".`,
+            fix: "Use rename_data_source_property for a focused rename, then call get_data_source with verbose:true to inspect the current schema.",
+          },
+        };
+      }
+      data = verified.dataSource as typeof response;
+    }
+    return { ok: true, data: slimDataSource(data, verbose ?? false) };
+  }),
+});
+
+const RenameDataSourcePropertyParams = z.object({
+  data_source_id: z.string(),
+  property: z
+    .string()
+    .describe("Existing property name or property ID. Encoded Notion property IDs such as %7CcNF are accepted."),
+  name: z.string().min(1).describe("New property name as it should appear in Notion."),
+  verbose: VERBOSE,
+});
+
+register({
+  name: "rename_data_source_property",
+  description: "Rename one data source property by existing property name or ID, then verify the schema changed. Does not alter property type or options.",
+  batchable: true,
+  schema: RenameDataSourcePropertyParams,
+  example: {
+    data_source_id: "<data-source-id>",
+    property: "Pipeline-Stufe",
+    name: "Phase",
+  },
+  exampleBatch: {
+    items: [
+      { data_source_id: "<data-source-id>", property: "Pipeline-Stufe", name: "Phase" },
+      { data_source_id: "<data-source-id>", property: "%7CcNF", name: "Phase" },
+    ],
+  },
+  handler: tryHandler(async ({ data_source_id, property, name, verbose }) => {
+    const notion = await getClient();
+    await notion.dataSources.update(
+      asSdk<UpdateDataSourceBody>({
+        data_source_id,
+        properties: {
+          [property]: { name },
+        },
+      })
+    );
+    const verified = await verifyRenameRequests(data_source_id, [{ property, name }]);
+    if (!verified.ok) {
+      return {
+        ok: false,
+        error: {
+          code: "rename_not_verified",
+          message: `Notion accepted the rename request, but property "${property}" was not verified as "${name}".`,
+          fix: "Call get_data_source with verbose:true and retry with the exact current property name or property ID.",
+        },
+      };
+    }
+    return {
+      ok: true,
+      data: verbose
+        ? verified.dataSource
+        : {
+            data_source_id,
+            property,
+            name,
+            verified: true,
+          },
+    };
   }),
 });

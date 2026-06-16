@@ -13,6 +13,7 @@ export async function initOperations(): Promise<void> {
     import("./databases.js"),
     import("./database-analysis.js"),
     import("./data-sources.js"),
+    import("./views.js"),
     import("./comments.js"),
     import("./users.js"),
     import("./files.js"),
