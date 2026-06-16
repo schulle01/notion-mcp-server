@@ -16,6 +16,8 @@ const ListDataSourcesParams = z.object({
 
 register({
   name: "list_data_sources",
+  access: "read",
+  domain: "data_sources",
   description: "List data sources under a database. Use this before query_database when targeting multi-source databases.",
   batchable: false,
   schema: ListDataSourcesParams,
@@ -111,6 +113,8 @@ async function verifyRenameRequests(
 
 register({
   name: "get_data_source",
+  access: "read",
+  domain: "data_sources",
   description: "Retrieve a single data source's schema (its property definitions and parent database).",
   batchable: true,
   schema: GetDataSourceParams,
@@ -135,6 +139,8 @@ const UpdateDataSourceParams = z.object({
 
 register({
   name: "update_data_source",
+  access: "write",
+  domain: "data_sources",
   description: "Update a data source's schema (properties, title, icon). Property updates may include name for renames. For database-level metadata use update_database.",
   batchable: true,
   schema: UpdateDataSourceParams,
@@ -187,6 +193,8 @@ const RenameDataSourcePropertyParams = z.object({
 
 register({
   name: "rename_data_source_property",
+  access: "write",
+  domain: "data_sources",
   description: "Rename one data source property by existing property name or ID, then verify the schema changed. Does not alter property type or options.",
   batchable: true,
   schema: RenameDataSourcePropertyParams,

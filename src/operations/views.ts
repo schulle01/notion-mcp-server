@@ -141,6 +141,8 @@ const ListViewsParams = z
 
 register({
   name: "list_views",
+  access: "read",
+  domain: "data_sources",
   description: "List Notion database/data-source views so callers can identify the view_id to inspect or configure.",
   batchable: false,
   schema: ListViewsParams,
@@ -171,6 +173,8 @@ const GetViewParams = z.object({
 
 register({
   name: "get_view",
+  access: "read",
+  domain: "data_sources",
   description: "Retrieve one Notion view, including its configuration when Notion returns it.",
   batchable: false,
   schema: GetViewParams,
@@ -200,6 +204,8 @@ const ConfigureViewPropertiesParams = z.object({
 
 register({
   name: "configure_view_properties",
+  access: "write",
+  domain: "data_sources",
   description: "Set visibility, widths, and ordering for properties in a Notion view, then verify the view configuration.",
   batchable: true,
   schema: ConfigureViewPropertiesParams,

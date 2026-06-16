@@ -311,6 +311,50 @@ const pageRow = (id: string, properties: Record<string, unknown>, url = `https:/
 });
 
 describe("database analysis ops", () => {
+  it("inspect_database_compact returns compact schema metadata", async () => {
+    notionStub.dataSources.retrieve.mockResolvedValue({
+      object: "data_source",
+      id: "ds-1",
+      title: [{ plain_text: "Feature Steps" }],
+      properties: {
+        Task: { id: "task", type: "title", title: {} },
+        Status: {
+          id: "status",
+          type: "select",
+          select: {
+            options: [
+              { id: "todo", name: "Todo", color: "gray" },
+              { id: "done", name: "Done", color: "green" },
+            ],
+          },
+        },
+      },
+    });
+
+    const res = await dispatch("inspect_database_compact", { data_source_id: "ds-1" });
+
+    expect(res).toMatchObject({
+      ok: true,
+      data: {
+        data_source_id: "ds-1",
+        title: "Feature Steps",
+        property_count: 2,
+        properties: [
+          { name: "Task", id: "task", type: "title" },
+          {
+            name: "Status",
+            id: "status",
+            type: "select",
+            options: [
+              { id: "todo", name: "Todo", color: "gray" },
+              { id: "done", name: "Done", color: "green" },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
   it("query_database_table returns selected-property projections only", async () => {
     notionStub.dataSources.query.mockResolvedValue({
       object: "list",
@@ -485,6 +529,55 @@ describe("database analysis ops", () => {
         ],
       },
     });
+  });
+
+  it("match_database_rows returns compact matches without full row payloads", async () => {
+    notionStub.dataSources.query.mockResolvedValue({
+      object: "list",
+      results: [
+        pageRow("p-1", {
+          Step: titleProp("6-030"),
+          Task: titleProp("[feature-slug] Verify post-deployment behavior"),
+          Status: selectProp("Deploy"),
+          Internal: numberProp(42),
+        }),
+        pageRow("p-2", {
+          Step: titleProp("1-010"),
+          Task: titleProp("[feature-slug] Prepare implementation"),
+          Status: selectProp("Code"),
+          Internal: numberProp(7),
+        }),
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    const res = await dispatch("match_database_rows", {
+      data_source_id: "ds-1",
+      query: "PO",
+      properties: ["Task"],
+      select: ["Step", "Task"],
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      data: {
+        query: "PO",
+        matched_total: 1,
+        results: [
+          {
+            page_id: "p-1",
+            title: "6-030",
+            properties: {
+              Step: "6-030",
+              Task: "[feature-slug] Verify post-deployment behavior",
+            },
+          },
+        ],
+      },
+    });
+    const row = (res as { data: { results: Array<Record<string, unknown>> } }).data.results[0];
+    expect(row).not.toHaveProperty("Internal");
   });
 });
 
