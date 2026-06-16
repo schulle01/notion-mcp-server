@@ -15,6 +15,8 @@ import type {
   CreateDatabaseParameters,
   CreateFileUploadParameters,
   CreatePageParameters,
+  GetViewParameters,
+  ListDatabaseViewsParameters,
   MovePageParameters,
   QueryDataSourceParameters,
   SendFileUploadParameters,
@@ -23,6 +25,7 @@ import type {
   UpdateDatabaseParameters,
   UpdateDataSourceParameters,
   UpdatePageParameters,
+  UpdateViewParameters,
 } from "@notionhq/client";
 
 type ClientType = InstanceType<typeof Client>;
@@ -35,6 +38,9 @@ export type CreateDatabaseBody = CreateDatabaseParameters;
 export type UpdateDatabaseBody = UpdateDatabaseParameters;
 export type QueryDataSourceBody = QueryDataSourceParameters;
 export type UpdateDataSourceBody = UpdateDataSourceParameters;
+export type ListViewsBody = ListDatabaseViewsParameters;
+export type GetViewBody = GetViewParameters;
+export type UpdateViewBody = UpdateViewParameters;
 export type AppendBlockBody = AppendBlockChildrenParameters;
 export type AppendBlockChildren = AppendBlockChildrenParameters["children"];
 export type UpdateBlockBody = UpdateBlockParameters;

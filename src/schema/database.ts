@@ -314,34 +314,60 @@ export const VERIFICATION_DB_PROPERTY_SCHEMA = z.object({
   description: z.string().optional(),
 });
 
-// Combined database property schema
-export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
-  preprocessJson,
-  z
-    .discriminatedUnion("type", [
-      TITLE_DB_PROPERTY_SCHEMA,
-      RICH_TEXT_DB_PROPERTY_SCHEMA,
-      NUMBER_DB_PROPERTY_SCHEMA,
-      SELECT_DB_PROPERTY_SCHEMA,
-      MULTI_SELECT_DB_PROPERTY_SCHEMA,
-      DATE_DB_PROPERTY_SCHEMA,
-      PEOPLE_DB_PROPERTY_SCHEMA,
-      FILES_DB_PROPERTY_SCHEMA,
-      CHECKBOX_DB_PROPERTY_SCHEMA,
-      URL_DB_PROPERTY_SCHEMA,
-      EMAIL_DB_PROPERTY_SCHEMA,
-      PHONE_NUMBER_DB_PROPERTY_SCHEMA,
-      FORMULA_DB_PROPERTY_SCHEMA,
-      RELATION_DB_PROPERTY_SCHEMA,
-      ROLLUP_DB_PROPERTY_SCHEMA,
-      CREATED_TIME_DB_PROPERTY_SCHEMA,
-      CREATED_BY_DB_PROPERTY_SCHEMA,
-      LAST_EDITED_TIME_DB_PROPERTY_SCHEMA,
-      LAST_EDITED_BY_DB_PROPERTY_SCHEMA,
-      BUTTON_DB_PROPERTY_SCHEMA,
-      UNIQUE_ID_DB_PROPERTY_SCHEMA,
-      VERIFICATION_DB_PROPERTY_SCHEMA,
-    ])
-    .describe("Union of all possible database property types")
+const DATABASE_PROPERTY_TYPE_SCHEMA = z
+  .discriminatedUnion("type", [
+    TITLE_DB_PROPERTY_SCHEMA,
+    RICH_TEXT_DB_PROPERTY_SCHEMA,
+    NUMBER_DB_PROPERTY_SCHEMA,
+    SELECT_DB_PROPERTY_SCHEMA,
+    MULTI_SELECT_DB_PROPERTY_SCHEMA,
+    DATE_DB_PROPERTY_SCHEMA,
+    PEOPLE_DB_PROPERTY_SCHEMA,
+    FILES_DB_PROPERTY_SCHEMA,
+    CHECKBOX_DB_PROPERTY_SCHEMA,
+    URL_DB_PROPERTY_SCHEMA,
+    EMAIL_DB_PROPERTY_SCHEMA,
+    PHONE_NUMBER_DB_PROPERTY_SCHEMA,
+    FORMULA_DB_PROPERTY_SCHEMA,
+    RELATION_DB_PROPERTY_SCHEMA,
+    ROLLUP_DB_PROPERTY_SCHEMA,
+    CREATED_TIME_DB_PROPERTY_SCHEMA,
+    CREATED_BY_DB_PROPERTY_SCHEMA,
+    LAST_EDITED_TIME_DB_PROPERTY_SCHEMA,
+    LAST_EDITED_BY_DB_PROPERTY_SCHEMA,
+    BUTTON_DB_PROPERTY_SCHEMA,
+    UNIQUE_ID_DB_PROPERTY_SCHEMA,
+    VERIFICATION_DB_PROPERTY_SCHEMA,
+  ])
+  .describe("Union of all possible database property types");
+
+const PROPERTY_RENAME_SCHEMA = z
+  .object({
+    name: z.string().min(1).describe("New property name as it appears in Notion."),
+  })
+  .strict();
+
+const PROPERTY_TYPED_UPDATE_SCHEMA = DATABASE_PROPERTY_TYPE_SCHEMA.and(
+  z.object({
+    name: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Optional new property name as it appears in Notion."),
+  })
 );
 
+// Combined database property schema for create-time property definitions.
+export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
+  preprocessJson,
+  DATABASE_PROPERTY_TYPE_SCHEMA
+);
+
+// Data source property update schema. Notion accepts rename-only updates
+// ({ name }) and typed schema updates that may also include name.
+export const DATA_SOURCE_PROPERTY_UPDATE_SCHEMA = z.preprocess(
+  preprocessJson,
+  z
+    .union([PROPERTY_RENAME_SCHEMA, PROPERTY_TYPED_UPDATE_SCHEMA])
+    .describe("Data source property update. Use { name } to rename without changing type.")
+);

@@ -5,18 +5,21 @@ import {
   isFullDataSource,
   isFullPage,
   isFullUser,
+  isFullView,
 } from "@notionhq/client";
 import type {
   BlockObjectResponse,
   CommentObjectResponse,
   DatabaseObjectResponse,
   DataSourceObjectResponse,
+  DataSourceViewObjectResponse,
   FileUploadObjectResponse,
   PageObjectResponse,
   PartialBlockObjectResponse,
   PartialCommentObjectResponse,
   PartialDatabaseObjectResponse,
   PartialDataSourceObjectResponse,
+  PartialDataSourceViewObjectResponse,
   PartialPageObjectResponse,
   PartialUserObjectResponse,
   RichTextItemResponse,
@@ -31,6 +34,9 @@ export type DatabaseResponse =
 export type DataSourceResponse =
   | DataSourceObjectResponse
   | PartialDataSourceObjectResponse;
+export type ViewResponse =
+  | DataSourceViewObjectResponse
+  | PartialDataSourceViewObjectResponse;
 export type UserResponse = UserObjectResponse | PartialUserObjectResponse;
 export type CommentResponse =
   | CommentObjectResponse
@@ -242,6 +248,33 @@ export function slimDataSource(ds: DataSourceResponse, verbose = false) {
     ),
     ...(ds.icon ? { icon: ds.icon.type } : {}),
     ...(ds.in_trash ? { in_trash: true } : {}),
+  };
+}
+
+function extractViewPropertyConfig(view: DataSourceViewObjectResponse) {
+  const config = view.configuration;
+  if (!config || !("properties" in config) || !Array.isArray(config.properties)) return undefined;
+  return config.properties.map((p) => ({
+    property_id: p.property_id,
+    ...(p.property_name ? { property_name: p.property_name } : {}),
+    ...(p.visible !== undefined ? { visible: p.visible } : {}),
+    ...(p.width !== undefined ? { width: p.width } : {}),
+  }));
+}
+
+export function slimView(view: ViewResponse, verbose = false) {
+  if (verbose) return view;
+  if (!isFullView(view)) {
+    const partial = view as { id: string; type?: string };
+    return partial.type ? { id: partial.id, type: partial.type } : { id: partial.id };
+  }
+  const properties = extractViewPropertyConfig(view);
+  return {
+    id: view.id,
+    name: view.name,
+    type: view.type,
+    ...(view.data_source_id ? { data_source_id: view.data_source_id } : {}),
+    ...(properties ? { properties } : {}),
   };
 }
 
