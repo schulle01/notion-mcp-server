@@ -15,26 +15,72 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24" # ships with npm >= 11.5 (required for Trusted Publishing)
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install dependencies
-        # 'npm install' (not 'npm ci') because npm 11+ strict mode rejects
-        # the macOS-generated lockfile for missing Linux-only optional native
-        # deps (e.g. @emnapi/core via @rolldown/binding-wasm32-wasi). Running
-        # 'npm install' on each platform prunes those entries; maintaining a
-        # cross-platform lockfile would require all maintainers to dev inside
-        # Linux containers. Lockfile is still respected — just non-strictly.
-        run: npm install --no-audit --no-fund
+      - name: Ensure npm is current
+        # Kept (unlike in ci.yml) because publishing has its own reason to be on
+        # a current npm: Trusted Publishing / OIDC provenance. node-version 24 is
+        # already meant to satisfy that floor; this guarantees it. A broken
+        # release costs far more than the 15s.
+        run: npm install -g npm@latest
 
+      - name: Install dependencies
+        # `npm ci` (not `npm install`): the published tarball must be built and
+        # tested against exactly the reviewed lockfile. `npm install` re-resolves
+        # the graph and rewrites the lock in place, so what we shipped was built
+        # from a tree nobody reviewed.
+        #
+        # The previous comment here said npm 11+ strict mode rejected the
+        # lockfile for missing Linux-only optional native deps. That is no longer
+        # true — the committed lock carries them (@rolldown/binding-linux-*,
+        # lightningcss-linux-*, @emnapi/core), and `npm ci` resolves it on
+        # ubuntu-latest in CI.
+        #
+        # --ignore-scripts blocks dependency lifecycle scripts (pre/post-install),
+        # the primary npm malware vector (Shai-Hulud, TrapDoor). Our runtime deps
+        # have no native build step, so nothing legitimate needs them here; our own
+        # build runs explicitly via `npm publish` -> `prepare` below.
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Run tests
         run: npm test
 
       - name: Publish to npm
         run: npm publish
+
+      - name: Sync server.json version with package.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const { version } = require('./package.json');
+            const s = JSON.parse(fs.readFileSync('server.json', 'utf8'));
+            s.version = version;
+            for (const p of s.packages) p.version = version;
+            fs.writeFileSync('server.json', JSON.stringify(s, null, 2) + '\n');
+          "
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+
+      - name: Publish to MCP Registry
+        # Retries because the registry validates the mcpName field against the
+        # package.json served by registry.npmjs.org, and the version published
+        # above can take a minute to propagate.
+        run: |
+          ./mcp-publisher login github-oidc
+          for i in 1 2 3 4 5; do
+            ./mcp-publisher publish && exit 0
+            echo "Publish attempt $i failed, retrying in 60s..."
+            sleep 60
+          done
+          exit 1

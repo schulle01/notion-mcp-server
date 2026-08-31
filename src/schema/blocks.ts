@@ -22,6 +22,7 @@ export const BASE_BLOCK_REQUEST_SCHEMA = z.object({
     .optional()
     .describe("Whether block has child blocks"),
   archived: z.boolean().optional().describe("Whether block is archived"),
+  in_trash: z.boolean().optional().describe("Whether block is in trash (2026-03-11 surface)"),
 });
 
 export const TEXT_BLOCK_BASE_REQUEST_SCHEMA = z.object({
@@ -177,3 +178,21 @@ export const TEXT_BLOCK_REQUEST_SCHEMA = z.preprocess(
     .describe("Union of all possible text block request types")
 );
 
+
+// A structural check, not a whitelist. Notion has more than thirty block types
+// and adds more, so an enum here would reject a valid block the day Notion
+// ships one. Requiring `type` plus a body keyed by it catches what callers
+// actually get wrong: a misspelled type, and a block with no body.
+export const BLOCK_INPUT_SCHEMA = z
+  .looseObject({
+    type: z.string().describe('Block type, e.g. "paragraph", "image", "table".'),
+  })
+  .refine((b) => Object.hasOwn(b, b.type), {
+    error: (issue) => {
+      const type = (issue.input as { type?: string })?.type;
+      return `Block has no "${type}" body. A block is { "type": "${type}", "${type}": { ... } }.`;
+    },
+  })
+  .describe(
+    'A Notion block: { "type": "<name>", "<name>": { ... } }. Prefer `markdown` for prose.'
+  );

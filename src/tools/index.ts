@@ -1,13 +1,14 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { server } from "../server/index.js";
-import { initOperations, getOperation } from "../operations/index.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { readNotionResource } from "./resources.js";
+import { getOperation } from "../operations/index.js";
 import {
   isOperationAllowed,
   operationNotAllowedError,
   enabledOperationNames,
   enabledOperations,
-  accessSummary,
 } from "../operations/access.js";
 import { dispatch } from "../dispatch/index.js";
 import { emitJsonSchema } from "../schema/emit.js";
@@ -54,9 +55,7 @@ Most responses are slimmed by default. Pass verbose:true inside payload (single)
 
 const DESCRIBE_DESCRIPTION = `Return the JSON Schema and a working example for one operation. Use this BEFORE notion_execute when the payload shape is non-trivial (query filters, structured block trees, database property definitions). For simple ops, just call notion_execute — its errors carry the schema.`;
 
-export async function registerAllTools(): Promise<void> {
-  await initOperations();
-
+export function registerAllTools(server: McpServer): void {
   server.registerTool(
     "notion_execute",
     {
@@ -139,12 +138,47 @@ export async function registerAllTools(): Promise<void> {
     })
   );
 
-  registerAllPrompts();
+  // Dynamic resources: let clients @-mention / attach a Notion page or database
+  // by id. Pages come back as markdown; databases as their (slim) schema JSON.
+  const firstVar = (v: string | string[]): string => (Array.isArray(v) ? v[0] : v);
 
-  const s = accessSummary();
-  console.error(
-    `Operation access: ${s.enabled}/${s.total} enabled (allow=${s.allow}; block=${s.block})`
+  server.registerResource(
+    "notion-page",
+    new ResourceTemplate("notion://page/{pageId}", { list: undefined }),
+    {
+      title: "Notion page (markdown)",
+      description:
+        "Read any Notion page as markdown by id — notion://page/<page_id>.",
+      mimeType: "text/markdown",
+    },
+    async (uri, variables) => {
+      const { mimeType, text } = await readNotionResource(
+        "page",
+        firstVar(variables.pageId)
+      );
+      return { contents: [{ uri: uri.href, mimeType, text }] };
+    }
   );
+
+  server.registerResource(
+    "notion-database",
+    new ResourceTemplate("notion://database/{dataSourceId}", { list: undefined }),
+    {
+      title: "Notion database (schema)",
+      description:
+        "Read a Notion data source's schema by id — notion://database/<data_source_id>.",
+      mimeType: "application/json",
+    },
+    async (uri, variables) => {
+      const { mimeType, text } = await readNotionResource(
+        "database",
+        firstVar(variables.dataSourceId)
+      );
+      return { contents: [{ uri: uri.href, mimeType, text }] };
+    }
+  );
+
+  registerAllPrompts(server);
 }
 
 function renderOperationsIndex(): string {
@@ -159,14 +193,17 @@ function renderOperationsIndex(): string {
   for (const def of enabledOperations()) {
     lines.push(`| \`${def.name}\` | ${def.batchable ? "yes" : "no"} | ${def.description} |`);
   }
-  // Only document the query_database filter DSL when that op is actually enabled —
-  // otherwise the menu advertises a disabled operation.
-  if (!isOperationAllowed("query_database")) {
+  // Document the WHERE DSL when any operation that accepts it is enabled.
+  // query_database, create_view, and update_view all take the same `where`.
+  const whereOps = ["query_database", "create_view", "update_view"].filter((op) =>
+    isOperationAllowed(op)
+  );
+  if (whereOps.length === 0) {
     return lines.join("\n");
   }
-  lines.push("", "## `query_database` WHERE DSL", "");
+  lines.push("", "## WHERE filter DSL", "");
   lines.push(
-    "`query_database.where` is a compact DSL that compiles to the Notion filter object. AND-by-default at the top level; nest `and`/`or`/`not` (case-insensitive — `AND`/`OR`/`NOT` also work) for boolean groups, prefix scalars with `__type` to force the property type, or fall back to raw `filter` for anything the DSL can't express.",
+    `The same \`where\` DSL is accepted by ${whereOps.map((o) => `\`${o}\``).join(", ")}. It is a compact shorthand that compiles to the Notion filter object. AND-by-default at the top level; nest \`and\`/\`or\`/\`not\` (case-insensitive — \`AND\`/\`OR\`/\`NOT\` also work) for boolean groups, prefix scalars with \`__type\` to force the property type, or fall back to raw \`filter\` for anything the DSL can't express.`,
     "",
     "Common shapes:",
     "",

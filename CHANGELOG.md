@@ -5,6 +5,106 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] — 2026-08-02
+
+### Added
+
+- **Block children are validated structurally.** Every Notion block is `{ "type": "<name>", "<name>": { ... } }`, and a `children` array that omitted the body key was previously passed straight to the API, which rejected it with a generic error. `append_blocks`, `update_block` and `create_page` now check the shape locally and reply with the specific missing key — `Block has no "paragraph" body. A block is { "type": "paragraph", "paragraph": { ... } }.` The check uses `Object.hasOwn`, so a `type` naming an inherited property (`"toString"`) is still rejected. Runtime validation only; the emitted JSON Schema is unchanged. (Thanks @gauravmm — PR #49.)
+- **`NOTION_UPLOAD_ROOT`.** Confines `upload_file`'s `path` source to one directory. Unset (the default) nothing changes — a `path` source can read any file the server process can, which is worth thinking about when a model composes the path. Set it, and relative paths resolve inside it and anything landing outside is refused. Symlinks are resolved with `fs.realpath` on both sides before the check, so a link sitting inside the root cannot point out of it; a link that stays inside still works, and a missing file still fails with a plain `ENOENT`. Documented in the environment-variable table in the README. (Thanks @gauravmm — PR #51; symlink resolution and docs in PR #61.)
+
+### Fixed
+
+- **`$defs` bodies in `notion_describe` had no shape.** The `$defs` hoisting walked each definition body through the same rewriter it used for references, so every body matched itself and was replaced by a `$ref` to itself — `$defs.rich_text_item` was literally `{"$ref": "#/$defs/rich_text_item"}`. Any client resolving those refs looped back to the same node and never saw the shape it was meant to publish. Affected 15 definitions across 7 operations: `create_page`, `create_database`, `update_database`, `update_block`, `set_page_property`, `set_page_properties`, `batch_mixed_blocks`. (Thanks @gauravmm — PR #44.)
+
+### Changed
+
+- **`@hono/node-server` `1.19.14 → 2.0.12`.** A real runtime dependency in HTTP transport mode — the SDK's `StreamableHTTPServerTransport`, which `src/server/http.ts` imports, pulls `getRequestListener` from it. Clears `GHSA-frvp-7c67-39w9` (path traversal in `serve-static` on Windows); `npm audit --omit=dev` now reports zero vulnerabilities. Neither v2 breaking change affects this package: the Node floor moved to `>=20`, which `engines` already declared, and the removed `@hono/node-server/vercel` adapter is imported nowhere. The public API is unchanged. (PR #63.)
+- **Every workflow installs from the lockfile.** `ci.yml`, `publish-npm.yml` and `publish-mcpb.yml` now run `npm ci` instead of `npm install`. `npm install` re-resolves the dependency graph and rewrites `package-lock.json` in place, so CI could test — and the release workflows could build and publish — a tree that differed from the reviewed lockfile, and a Dependabot pin could be undone by the resolver before a single test ran. `publish-npm.yml`'s note that `npm ci` rejected the lockfile over missing Linux-only optional native deps is stale: the committed lock carries them. In `ci.yml` the separate `npm install -g npm@latest` step is gone with it (`min-release-age` in `.npmrc` gates resolution, and `npm ci` does not resolve); `publish-npm.yml` keeps it for Trusted Publishing / OIDC provenance. (PRs #61, #62.)
+- **Runtime dependency bumps:** `@modelcontextprotocol/sdk` `1.29.0 → 1.30.0` (#58), `@notionhq/client` `5.22.0 → 5.23.2` (#42), `hono` `4.12.25 → 4.12.33` (#59), `body-parser` `2.2.2 → 2.3.0` (#56), `fast-uri` `3.1.2 → 3.1.5` (#57).
+- **Dev toolchain bumps:** `vitest` `4.1.9 → 4.1.10`, `vite` `8.0.16 → 8.1.3`, `rolldown` `1.0.3 → 1.1.4`, `postcss` `8.5.15 → 8.5.25` (#40, #60), `@types/node` `26.0.1 → 26.1.1` (#40, #42). The `postcss` bump closes the only high-severity advisory that was open. No runtime impact.
+- **CI action bumps:** `actions/setup-node` `v6.4.0 → v7.0.0` (#39), `actions/checkout` `v7.0.0 → v7.0.1` and `docker/login-action` `v4.4.0 → v4.6.0` (#52). All pinned by commit SHA.
+
+## [2.12.0] — 2026-07-10
+
+### Added
+
+- **`path` source for `upload_file`.** Upload a local file by path — the server reads the bytes directly (`fs.readFile`) instead of receiving them as base64 through the tool call. For a local stdio server the base64 path forces the whole file (≈33% larger encoded) through the MCP client and, in agent setups, the model's output; reading from disk skips that entirely. Use `source: { type: "path", path: "/abs/or/~/file.pdf" }`; a leading `~`/`~/` expands to the home directory. `filename` is now optional for a `path` source (derived from the basename) and stays required for `base64`/`url`. Content-type inference gains Markdown (`.md`, `.markdown`) and Microsoft Office formats (`.doc`, `.docx`, `.ppt`, `.pptx`, `.xls`, `.xlsx`). Purely additive — `base64` and `url` sources are unchanged. (Thanks @qch2012 — PR #38.)
+
+## [2.11.0] — 2026-07-03
+
+### Fixed
+
+- **Relation properties now target a data source, not a database.** When defining a `relation` database property, the field is now `data_source_id` (was `database_id`), matching Notion's data-source model under the pinned `Notion-Version: 2026-03-11` — the old field was rejected by the API. If you were passing `database_id` inside a relation config, switch to `data_source_id` (resolve it with `list_data_sources` if needed). (Thanks @insane66613 — PR #28.)
+
+## [2.10.1] — 2026-07-03
+
+Distribution release — no runtime changes to the server itself.
+
+### Added
+
+- **Official MCP registry.** The server is published to [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io) as `io.github.awkoy/notion-mcp-server`: `server.json` manifest, `mcpName` field in package.json, and automatic registry publish (GitHub OIDC) in the npm release workflow. (#29)
+- **Claude Desktop one-click extension.** Every release now attaches `notion-mcp-server.mcpb` — download, double-click, paste your Notion token; no config-file editing or Node.js required. (#30)
+- **OCI registry label.** Docker images now carry `io.modelcontextprotocol.server.name`, allowing the GHCR image to be added to the MCP registry entry later. (#29)
+
+## [2.10.0] — 2026-07-02
+
+### Added
+
+- **Create pages from Notion templates.** `create_page` gains an optional `template` field — `{ type: "template_id" | "default" | "none", template_id?, timezone? }` — passed through to the Notion API's page-create template support. It is mutually exclusive with `markdown`/`children` (the API rejects body content alongside a template) and requires `template_id` when `type` is `"template_id"`; both rules are validated locally with clear messages. (Thanks @Omee11 — PR #24.)
+- **`list_data_source_templates`.** New read operation wrapping the SDK's `dataSources.listTemplates`, returning `{ id, name, is_default }` per template so callers can discover the `template_id` to apply. No new dependencies — the already-pinned `Notion-Version: 2026-03-11` covers both endpoints.
+
+### Changed
+
+- **Dev toolchain bumps:** `vitest` `4.1.8 → 4.1.9`. No runtime impact.
+
+## [2.9.0] — 2026-06-21
+
+### Added
+
+- **HTTP(S) proxy support.** The Notion client now routes its requests through an HTTP(S) proxy when one is configured via the standard `HTTPS_PROXY` / `HTTP_PROXY` (and lowercase) environment variables; with no proxy set, behavior is unchanged. Useful behind corporate proxies. (Thanks @KokomiSensei — original PR #17.)
+
+### Changed
+
+- **Docker base image → `node:24-alpine`** (current Active LTS, digest-pinned), up from `node:22-alpine`. Dependabot proposed the non-LTS `node:26`; we stay on LTS.
+- **Dev toolchain bumps:** TypeScript `5.9 → 6.0`, `@types/node` `22 → 25`, `shx` `0.3 → 0.4`, `vitest` `4.1.7 → 4.1.8`, and pinned GitHub Actions SHAs refreshed. No runtime impact.
+
+## [2.8.0] — 2026-06-21
+
+### Added
+
+- **Database views.** Six new operations for Notion database views (GitHub #18): `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view`. `query_view` runs a view's stored filters/sorts and returns hydrated rows by default (set `hydrate: false` for ordered ids only), surfacing `total_count` and `truncated`; it hides Notion's create-then-paginate query mechanics. `list_views` hydrates Notion's id-only refs to `{id, name, type}` by default. `create_view` / `update_view` reuse the `where` filter shorthand and accept a raw `configuration` for type-specific layout (calendar/board/timeline/chart/map require it; a missing config is rejected locally with a fix rather than a raw API 400). `delete_view` is destructive and honors `NOTION_READ_ONLY` / the allow/block lists. See [README → Operations menu](./README.md#operations-menu-43-ops-plus-one-alias).
+
+### Changed
+
+- **Pinned `Notion-Version` bumped `2025-09-03` → `2026-03-11`.** The append-children `position` object and page/database `in_trash` field were already in use; this release also routes the legacy `update_data_source` `archived` alias into `in_trash` (the `archived` field was removed on the new surface) and adds `in_trash` to the block response schema. No dependency change (`@notionhq/client@^5.22.0`).
+
+## [2.7.0] — 2026-06-17
+
+### Added
+
+- **Streamable HTTP transport.** The server can now run as a remote/hosted endpoint in addition to stdio. Set `MCP_TRANSPORT=http` (default stays `stdio`) to serve the MCP Streamable HTTP protocol at `POST/GET/DELETE /mcp` plus an unauthenticated `GET /health`. Stateful sessions (one server instance per `mcp-session-id`), built on Node's `http` module (no new dependencies). Single-tenant: it uses the same `NOTION_TOKEN`. Config via env: `PORT` (default `3000`), `HOST` (default `127.0.0.1`), optional `MCP_AUTH_TOKEN` (when set, `Authorization: Bearer <token>` is required on `/mcp`), and `MCP_ALLOWED_HOSTS` / `MCP_ALLOWED_ORIGINS` for DNS-rebinding protection (localhost defaults). See [README → Remote / HTTP transport](./README.md#-remote--http-transport).
+
+### Security
+
+- **Supply-chain hardening of the build & release pipeline** (no change to the published package's runtime code). Following the 2025–2026 npm attack wave (Shai-Hulud worm, TrapDoor, Miasma/`binding.gyp`): the npm publish job now installs with `--ignore-scripts` (blocking dependency lifecycle scripts, the primary malware vector) and upgrades npm so the existing `min-release-age=7` cooldown is actually enforced in CI; every GitHub Action is pinned to a full commit SHA (not a mutable tag); the Docker base image is pinned to its multi-arch digest; `save-exact=true` prevents version-range drift; a new `CI` workflow gates every PR/push on `npm audit --omit=dev --audit-level=high`, build, and tests; and `dependabot.yml` keeps npm deps (with a matching 7-day cooldown), Actions SHAs, and the base-image digest current via reviewed PRs.
+
+## [2.6.1] — 2026-06-17
+
+### Security
+
+- **Refreshed transitive `hono` and `vite` to their patched releases.** `hono` `4.12.23 → 4.12.25` (clears several advisories incl. GHSA-88fw-hqm2-52qc) and `vite` `8.0.14 → 8.0.16` (GHSA-fx2h-pf6j-xcff). Lockfile-only change — no direct dependency or runtime behavior changed. `hono` arrives transitively via `@modelcontextprotocol/sdk` and is only exercised by HTTP transports (this server is stdio-only); `vite` is a dev-only test-runner dependency and is not shipped in the published package. `npm audit` is now clean.
+
+## [2.6.0] — 2026-06-17
+
+### Added
+
+- **`NOTION_READ_ONLY` switch.** Set `NOTION_READ_ONLY=true` (also accepts `1`/`yes`/`on`) to disable every write operation in one flag — equivalent to `NOTION_BLOCKED_OPERATIONS=write`, and it composes with the existing allow/block lists. Read-only is reflected in the startup access log. Optional; unset means no change. See [README → Restricting operations](./README.md#restricting-operations).
+- **Dynamic MCP resources for pages and databases.** In addition to the `notion://operations` cheat sheet, the server now serves `notion://page/<page_id>` (page body as markdown) and `notion://database/<data_source_id>` (data source schema as JSON), so clients that support resource attachment can pull Notion content into context without a tool call. Both route through the normal dispatch path, so they inherit auth, rate limiting, retries, and access gating (a disabled or read-only target returns an error envelope rather than content).
+
+### Fixed
+
+- **Reported server version was stuck at `1.4.0`.** The MCP handshake version was a hand-maintained constant left over from the Zod 4 migration and had drifted from the published package version. It is now read directly from `package.json`, so the handshake and startup log always report the real version.
+
 ## [2.5.1] — 2026-06-05
 
 ### Fixed
