@@ -5,21 +5,18 @@ import {
   isFullDataSource,
   isFullPage,
   isFullUser,
-  isFullView,
 } from "@notionhq/client";
 import type {
   BlockObjectResponse,
   CommentObjectResponse,
   DatabaseObjectResponse,
   DataSourceObjectResponse,
-  DataSourceViewObjectResponse,
   FileUploadObjectResponse,
   PageObjectResponse,
   PartialBlockObjectResponse,
   PartialCommentObjectResponse,
   PartialDatabaseObjectResponse,
   PartialDataSourceObjectResponse,
-  PartialDataSourceViewObjectResponse,
   PartialPageObjectResponse,
   PartialUserObjectResponse,
   RichTextItemResponse,
@@ -34,9 +31,6 @@ export type DatabaseResponse =
 export type DataSourceResponse =
   | DataSourceObjectResponse
   | PartialDataSourceObjectResponse;
-export type ViewResponse =
-  | DataSourceViewObjectResponse
-  | PartialDataSourceViewObjectResponse;
 export type UserResponse = UserObjectResponse | PartialUserObjectResponse;
 export type CommentResponse =
   | CommentObjectResponse
@@ -251,30 +245,24 @@ export function slimDataSource(ds: DataSourceResponse, verbose = false) {
   };
 }
 
-function extractViewPropertyConfig(view: DataSourceViewObjectResponse) {
-  const config = view.configuration;
-  if (!config || !("properties" in config) || !Array.isArray(config.properties)) return undefined;
-  return config.properties.map((p) => ({
-    property_id: p.property_id,
-    ...(p.property_name ? { property_name: p.property_name } : {}),
-    ...(p.visible !== undefined ? { visible: p.visible } : {}),
-    ...(p.width !== undefined ? { width: p.width } : {}),
-  }));
-}
-
-export function slimView(view: ViewResponse, verbose = false) {
+// View objects are loosely typed on the SDK surface, so accept `unknown` and
+// narrow defensively. Default keeps the high-signal fields (id/name/type and
+// any filter/sorts); the bulky type-specific `configuration` is verbose-only.
+export function slimView(view: unknown, verbose = false) {
   if (verbose) return view;
-  if (!isFullView(view)) {
-    const partial = view as { id: string; type?: string };
-    return partial.type ? { id: partial.id, type: partial.type } : { id: partial.id };
-  }
-  const properties = extractViewPropertyConfig(view);
+  const v = (view ?? {}) as {
+    id?: string;
+    name?: string;
+    type?: string;
+    filter?: unknown;
+    sorts?: unknown;
+  };
   return {
-    id: view.id,
-    name: view.name,
-    type: view.type,
-    ...(view.data_source_id ? { data_source_id: view.data_source_id } : {}),
-    ...(properties ? { properties } : {}),
+    id: v.id,
+    ...(v.name !== undefined ? { name: v.name } : {}),
+    ...(v.type !== undefined ? { type: v.type } : {}),
+    ...(v.filter ? { filter: v.filter } : {}),
+    ...(Array.isArray(v.sorts) && v.sorts.length ? { sorts: v.sorts } : {}),
   };
 }
 

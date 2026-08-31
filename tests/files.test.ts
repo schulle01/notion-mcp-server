@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   BatchResult,
   OperationError,
@@ -193,6 +196,30 @@ describe("upload_file (single-part)", () => {
     expect(blob.type).toBe("text/plain");
   });
 
+  it.each([
+    ["notes.md", "text/markdown"],
+    ["deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+    ["sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    ["doc.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  ])("infers content_type for %s", async (filename, expectedType) => {
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-infer" });
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-infer",
+      status: "uploaded",
+    });
+
+    await dispatch("upload_file", {
+      filename,
+      source: { type: "base64", data: Buffer.from("x").toString("base64") },
+    });
+
+    expect(notionStub.fileUploads.create).toHaveBeenCalledWith({
+      mode: "single_part",
+      filename,
+      content_type: expectedType,
+    });
+  });
+
   it("returns validation_error envelope when content_type is omitted and the extension isn't on the allowlist", async () => {
     const res = await dispatch("upload_file", {
       mode: "single",
@@ -343,6 +370,85 @@ describe("upload_file (URL source)", () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────
+// upload_file: local path source
+// ──────────────────────────────────────────────────────────────────────────
+
+describe("upload_file (path source)", () => {
+  it("reads the file from disk and derives filename from the path basename", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const dir = await mkdtemp(join(tmpdir(), "notion-upload-"));
+    const filePath = join(dir, "report.txt");
+    const payload = Buffer.from("local bytes on disk");
+    await writeFile(filePath, payload);
+
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-path" });
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-path",
+      status: "uploaded",
+    });
+
+    try {
+      const res = await dispatch("upload_file", {
+        source: { type: "path", path: filePath },
+      });
+
+      expect(res).toMatchObject({ ok: true });
+      // filename derived from basename, content_type inferred from .txt
+      expect(notionStub.fileUploads.create).toHaveBeenCalledWith({
+        mode: "single_part",
+        filename: "report.txt",
+        content_type: "text/plain",
+      });
+      expect((await sendBytes(0)).equals(payload)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("honors an explicit filename over the path basename", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const dir = await mkdtemp(join(tmpdir(), "notion-upload-"));
+    const filePath = join(dir, "tmpname.bin");
+    await writeFile(filePath, Buffer.from("x"));
+
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-path2" });
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-path2",
+      status: "uploaded",
+    });
+
+    try {
+      await dispatch("upload_file", {
+        filename: "real.txt",
+        source: { type: "path", path: filePath },
+      });
+      expect(notionStub.fileUploads.create).toHaveBeenCalledWith({
+        mode: "single_part",
+        filename: "real.txt",
+        content_type: "text/plain",
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces the fs error when the path does not exist and makes no SDK calls", async () => {
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "/no/such/file-xyz.txt" },
+    });
+    expect((res as { ok: boolean }).ok).toBe(false);
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+    expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
 // upload_file: validation error path
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -367,6 +473,17 @@ describe("upload_file (validation)", () => {
     expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
     expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
     expect(notionStub.fileUploads.complete).not.toHaveBeenCalled();
+  });
+
+  it("rejects a base64 source with no filename (nothing to derive) and makes no SDK calls", async () => {
+    const res = await dispatch("upload_file", {
+      source: { type: "base64", data: Buffer.from("x").toString("base64") },
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("validation_error");
+    expect(res.error.message).toContain("filename is required");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+    expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
   });
 });
 
@@ -428,5 +545,106 @@ describe("get_file_upload", () => {
         content_length: 1234,
       },
     });
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// upload_file: NOTION_UPLOAD_ROOT
+// ──────────────────────────────────────────────────────────────────────────
+
+describe("upload_file (upload root)", () => {
+  const root = mkdtempSync(join(tmpdir(), "notion-root-"));
+  writeFileSync(join(root, "inside.txt"), "in");
+  const outside = mkdtempSync(join(tmpdir(), "notion-out-"));
+  writeFileSync(join(outside, "outside.txt"), "out");
+
+  beforeEach(() => {
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-root", status: "pending" });
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-root",
+      status: "uploaded",
+      filename: "inside.txt",
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.NOTION_UPLOAD_ROOT;
+  });
+
+  it("takes a relative path inside the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    const res = await dispatch("upload_file", { source: { type: "path", path: "inside.txt" } });
+    assertOk(res);
+  });
+
+  it("refuses a path outside the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: join(outside, "outside.txt") },
+    });
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+  });
+
+  it("refuses a traversal out of the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "../../etc/passwd" },
+    });
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+  });
+
+  it("leaves absolute paths alone when no root is set", async () => {
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: join(outside, "outside.txt") },
+    });
+    assertOk(res);
+  });
+
+  // A prefix check on the lexical path is not confinement: resolve() never
+  // touches the filesystem, so a symlink sitting inside the root passes the
+  // check and then open() follows it straight out of the root.
+  it("refuses a symlink inside the root that points outside it", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    symlinkSync(join(outside, "outside.txt"), join(root, "escape.txt"));
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "escape.txt" },
+    });
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a symlinked directory inside the root that points outside it", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    symlinkSync(outside, join(root, "escape-dir"));
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "escape-dir/outside.txt" },
+    });
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("still follows a symlink that stays inside the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    symlinkSync(join(root, "inside.txt"), join(root, "link-inside.txt"));
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "link-inside.txt" },
+    });
+    assertOk(res);
+  });
+
+  // A path that does not exist cannot be a symlink, so the confinement check
+  // must fall through to a plain ENOENT rather than a resolution error.
+  it("reports a missing in-root file as a normal fs error", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "nope.txt" },
+    });
+    assertErr(res);
+    expect(res.error.message).not.toContain("outside NOTION_UPLOAD_ROOT");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
   });
 });

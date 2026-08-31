@@ -32,9 +32,14 @@ export type OperationName =
   | "get_data_source"
   | "update_data_source"
   | "rename_data_source_property"
+  | "list_data_source_templates"
   | "list_views"
   | "get_view"
   | "configure_view_properties"
+  | "query_view"
+  | "create_view"
+  | "update_view"
+  | "delete_view"
   | "list_comments"
   | "add_page_comment"
   | "add_discussion_comment"
@@ -58,7 +63,8 @@ export type OperationDomain =
   | "data_sources"
   | "comments"
   | "users"
-  | "files";
+  | "files"
+  | "views";
 
 export type OperationResult<T = unknown> =
   | { ok: true; data: T }

@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # npm dependencies. The cooldown mirrors .npmrc's min-release-age=7 so
+  # Dependabot won't open a PR for a release that's less than a week old.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # GitHub Actions — keep the SHA pins current (Dependabot bumps SHA + comment).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Docker base image — bumps the pinned node:22-alpine digest in a reviewed PR.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly

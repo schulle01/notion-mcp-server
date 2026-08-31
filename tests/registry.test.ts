@@ -6,11 +6,20 @@ beforeAll(async () => {
 });
 
 describe("operations registry", () => {
-  it("registers every name in the OperationName union (47 total: 39 ops + trash_page + get_self + fork DB additions)", () => {
+  it("registers every name in the OperationName union (52 total: upstream plus fork DB/view extensions)", () => {
     const names = operationNames();
-    expect(names.length).toBe(47);
+    expect(names.length).toBe(52);
     expect(names).toContain("trash_page");
     expect(names).toContain("get_self");
+  });
+
+  it("includes the view ops", () => {
+    expect(getOperation("list_views")).toBeDefined();
+    expect(getOperation("get_view")).toBeDefined();
+    expect(getOperation("query_view")).toBeDefined();
+    expect(getOperation("create_view")).toBeDefined();
+    expect(getOperation("update_view")).toBeDefined();
+    expect(getOperation("delete_view")).toBeDefined();
   });
 
   it("includes the file upload ops", () => {

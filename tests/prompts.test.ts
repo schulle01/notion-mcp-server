@@ -24,13 +24,14 @@ vi.mock("../src/services/notion.js", () => ({
   getClient: async () => notionStub,
 }));
 
-import { server } from "../src/server/index.js";
-import { registerAllTools } from "../src/tools/index.js";
+import { createServer } from "../src/server/index.js";
+import { initOperations } from "../src/operations/index.js";
 
 let client: Client;
 
 beforeAll(async () => {
-  await registerAllTools();
+  await initOperations();
+  const server = createServer();
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   client = new Client({ name: "prompts-test", version: "0.0.0" });

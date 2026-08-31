@@ -127,12 +127,42 @@ register({
   }),
 });
 
+const ListDataSourceTemplatesParams = z.object({
+  data_source_id: z.string().describe("Data source ID to list templates for."),
+  name: z.string().optional().describe("Case-insensitive substring filter on template name."),
+  start_cursor: z.string().optional(),
+  page_size: z.number().int().min(1).max(100).optional(),
+});
+
+register({
+  name: "list_data_source_templates",
+  access: "read",
+  domain: "data_sources",
+  description: "List the page templates available for a data source. Returns {id, name, is_default} per template. Pass a returned id as template.template_id to create_page to apply it.",
+  batchable: false,
+  schema: ListDataSourceTemplatesParams,
+  example: { data_source_id: "<data-source-id>" },
+  handler: tryHandler(async ({ data_source_id, name, start_cursor, page_size }) => {
+    const notion = await getClient();
+    const res = await notion.dataSources.listTemplates({
+      data_source_id,
+      ...(name !== undefined ? { name } : {}),
+      ...(start_cursor !== undefined ? { start_cursor } : {}),
+      ...(page_size !== undefined ? { page_size } : {}),
+    });
+    return {
+      ok: true,
+      data: { data_source_id, templates: res.templates },
+    };
+  }),
+});
+
 const UpdateDataSourceParams = z.object({
   data_source_id: z.string(),
   title: z.array(z.unknown()).optional().describe("Rich text array for the data source title."),
   properties: z.record(z.string(), DATA_SOURCE_PROPERTY_UPDATE_SCHEMA).optional(),
   icon: z.unknown().optional(),
-  archived: z.boolean().optional(),
+  archived: z.boolean().optional().describe("Deprecated alias for in_trash (removed on the 2026-03-11 surface). Routed to in_trash."),
   in_trash: z.boolean().optional(),
   verbose: VERBOSE,
 });
@@ -154,13 +184,15 @@ register({
   handler: tryHandler(async ({ data_source_id, title, properties, icon, archived, in_trash, verbose }) => {
     const notion = await getClient();
     const renames = collectRenameRequests(properties);
+    // `archived` was removed on the 2026-03-11 surface; route the legacy alias
+    // into `in_trash` so we never send a field the API rejects.
+    const trash = in_trash ?? archived;
     const body = {
       data_source_id,
       ...(title !== undefined ? { title } : {}),
       ...(properties !== undefined ? { properties } : {}),
       ...(icon !== undefined ? { icon } : {}),
-      ...(archived !== undefined ? { archived } : {}),
-      ...(in_trash !== undefined ? { in_trash } : {}),
+      ...(trash !== undefined ? { in_trash: trash } : {}),
     };
     const response = await notion.dataSources.update(asSdk<UpdateDataSourceBody>(body));
     let data = response;

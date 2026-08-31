@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-alpine AS builder
+# Base image pinned to its multi-arch index digest (not the mutable `24-alpine`
+# tag) so the registry can't swap the contents under us. Dependabot's docker
+# ecosystem bumps this digest in a reviewed PR. Resolve a new one with:
+#   docker buildx imagetools inspect node:24-alpine
+FROM node:24-alpine@sha256:156b55f92e98ccd5ef49578a8cea0df4679826564bad1c9d4ef04462b9f0ded6 AS builder
 
 WORKDIR /app
 
@@ -21,7 +25,7 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npm run build
 
-FROM node:22-alpine AS release
+FROM node:24-alpine@sha256:156b55f92e98ccd5ef49578a8cea0df4679826564bad1c9d4ef04462b9f0ded6 AS release
 
 WORKDIR /app
 
@@ -39,5 +43,9 @@ RUN --mount=type=cache,id=npm-$TARGETARCH,target=/root/.npm,sharing=locked \
 COPY --from=builder /app/build ./build
 
 USER node
+
+# Documentation only (does not publish the port). The default transport is stdio;
+# set MCP_TRANSPORT=http and publish this port to run the HTTP transport.
+EXPOSE 3000
 
 ENTRYPOINT ["node", "build/index.js"]

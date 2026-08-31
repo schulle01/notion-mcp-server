@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { GetPromptResult } from "@modelcontextprotocol/sdk/types.js";
-import { server } from "../server/index.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 function userMessage(text: string): GetPromptResult {
   return {
@@ -13,7 +13,7 @@ function userMessage(text: string): GetPromptResult {
   };
 }
 
-export function registerAllPrompts(): void {
+export function registerAllPrompts(server: McpServer): void {
   server.registerPrompt(
     "create_task",
     {
