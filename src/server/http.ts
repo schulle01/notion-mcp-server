@@ -1,11 +1,12 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { isInitializeRequest } from "@modelcontextprotocol/server";
 import type { HttpConfig } from "../config/http.js";
 import { CONFIG } from "../config/index.js";
 import { createServer, logAccessSummary, verifyNotionAuth } from "./index.js";
 import { checkAuth } from "./auth.js";
+import { log } from "../utils/log.js";
 
 export type HttpHandle = {
   /** Actually-bound port (resolves PORT=0 to the OS-assigned port). */
@@ -106,11 +107,13 @@ function defaultAllowedOrigins(port: number): string[] {
 
 export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
   // One transport per session; the connected server instance lives behind it.
-  const transports: Record<string, StreamableHTTPServerTransport> = {};
+  const transports: Record<string, NodeStreamableHTTPServerTransport> = {};
 
   const httpServer = http.createServer((req, res) => {
     void handle(req, res).catch(async (err) => {
-      console.error("HTTP handler error:", err);
+      log.error(
+        `HTTP handler error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`
+      );
       await sendJsonRpcError(req, res, 500, -32603, "Internal server error");
     });
   });
@@ -176,7 +179,7 @@ export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
       let transport = sessionId ? transports[sessionId] : undefined;
       if (!transport) {
         if (!sessionId && isInitializeRequest(body)) {
-          transport = new StreamableHTTPServerTransport({
+          transport = new NodeStreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
             onsessioninitialized: (id) => {
               transports[id] = transport!;
@@ -212,11 +215,11 @@ export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
     await sendJsonRpcError(req, res, 405, -32601, "Method not allowed");
   }
 
-  console.error(
+  log.info(
     `${CONFIG.serverName} v${CONFIG.serverVersion} running on http://${config.host}:${port}/mcp`
   );
   if (!config.authToken && !isLoopbackHost(config.host)) {
-    console.error(
+    log.warning(
       "WARNING: HTTP endpoint bound to a non-loopback host without MCP_AUTH_TOKEN — anyone who can reach it acts as your NOTION_TOKEN. Set MCP_AUTH_TOKEN."
     );
   }

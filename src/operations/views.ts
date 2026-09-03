@@ -15,6 +15,7 @@ import {
   type GetViewQueryResultsBody,
   type DeleteViewQueryBody,
 } from "../utils/notion-types.js";
+import { notionId } from "../schema/id.js";
 
 const VERBOSE = z.boolean().optional();
 // Hydration fans out one pages.retrieve / views.retrieve per id. The dispatch
@@ -259,7 +260,7 @@ function compileViewFilter(
 // ──────────────────────────────────────────────────────────────────────────
 
 const GetViewParams = z.object({
-  view_id: z.string().describe("View ID to retrieve."),
+  view_id: notionId("view").describe("View ID to retrieve."),
   verbose: VERBOSE,
 });
 
@@ -280,7 +281,7 @@ register({
 });
 
 const ConfigureViewPropertiesParams = z.object({
-  view_id: z.string(),
+  view_id: notionId("view"),
   properties: z.array(ViewPropertyConfig).min(1),
   mode: z
     .enum(["merge", "replace"])
@@ -341,7 +342,11 @@ register({
     }
 
     const currentConfig = viewConfiguration(current) ?? { type };
-    const nextProperties = mergeProperties(viewProperties(currentConfig, property_slot), properties, mode);
+    const nextProperties = mergeProperties(
+      viewProperties(currentConfig, property_slot),
+      properties,
+      mode
+    );
     await notion.views.update(
       asSdk<UpdateViewBody>({
         view_id,
@@ -364,12 +369,11 @@ register({
         ok: false,
         error: {
           code: "view_properties_not_verified",
-          message: verified.message,
-          fix: "Call get_view with verbose:true to inspect the current view configuration and retry with property IDs from that response.",
+          message: `Notion accepted the view update, but verification failed: ${verified.message}`,
+          fix: "Call get_view with verbose:true to inspect the current configuration and retry with exact property IDs.",
         },
       };
     }
-
     return {
       ok: true,
       data: verbose ? verifiedView : slimConfiguredView(verifiedView, property_slot),
@@ -383,8 +387,8 @@ register({
 
 const ListViewsParams = z
   .object({
-    database_id: z.string().optional().describe("List views under this database."),
-    data_source_id: z.string().optional().describe("List views under this data source."),
+    database_id: notionId().optional().describe("List views under this database."),
+    data_source_id: notionId().optional().describe("List views under this data source."),
     start_cursor: z.string().optional(),
     page_size: z.number().min(1).max(100).optional(),
     hydrate: z
@@ -440,7 +444,7 @@ const DEFAULT_ITEM_LIMIT = 1000;
 const MAX_ITEM_LIMIT = 1000;
 
 const QueryViewParams = z.object({
-  view_id: z.string().describe("View ID. Executes the view's stored filters/sorts server-side."),
+  view_id: notionId("view").describe("View ID. Executes the view's stored filters/sorts server-side."),
   page_size: z.number().min(1).max(MAX_PAGE_SIZE).optional(),
   paginate: z.boolean().optional().describe("Walk all result pages, up to page_limit rows."),
   page_limit: z
@@ -575,9 +579,8 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const CreateViewParams = z.object({
-  data_source_id: z.string().optional(),
-  database_id: z
-    .string()
+  data_source_id: notionId().optional(),
+  database_id: notionId()
     .optional()
     .describe("Single-source databases are auto-resolved; multi-source require data_source_id."),
   name: z.string().describe("View name."),
@@ -657,7 +660,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const UpdateViewParams = z.object({
-  view_id: z.string(),
+  view_id: notionId("view"),
   name: z.string().optional(),
   where: WHERE_SCHEMA.optional().describe(
     "Replace the view filter (typed DSL). Mutually exclusive with `filter`."
@@ -703,7 +706,7 @@ register({
 // delete_view
 // ──────────────────────────────────────────────────────────────────────────
 
-const DeleteViewParams = z.object({ view_id: z.string() });
+const DeleteViewParams = z.object({ view_id: notionId("view") });
 
 register({
   name: "delete_view",

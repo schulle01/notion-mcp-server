@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { notionId } from "./id.js";
 import { preprocessJson } from "./preprocess.js";
 import { NUMBER_FORMAT } from "./number.js";
 
@@ -160,8 +161,7 @@ export const RELATION_DB_PROPERTY_SCHEMA = z.object({
   type: z.literal("relation").describe("Relation property type"),
   relation: z
     .object({
-      data_source_id: z
-        .string()
+      data_source_id: notionId()
         .describe("The ID of the data source this relation refers to"),
       synced_property_name: z
         .string()
@@ -314,60 +314,57 @@ export const VERIFICATION_DB_PROPERTY_SCHEMA = z.object({
   description: z.string().optional(),
 });
 
-const DATABASE_PROPERTY_TYPE_SCHEMA = z
-  .discriminatedUnion("type", [
-    TITLE_DB_PROPERTY_SCHEMA,
-    RICH_TEXT_DB_PROPERTY_SCHEMA,
-    NUMBER_DB_PROPERTY_SCHEMA,
-    SELECT_DB_PROPERTY_SCHEMA,
-    MULTI_SELECT_DB_PROPERTY_SCHEMA,
-    DATE_DB_PROPERTY_SCHEMA,
-    PEOPLE_DB_PROPERTY_SCHEMA,
-    FILES_DB_PROPERTY_SCHEMA,
-    CHECKBOX_DB_PROPERTY_SCHEMA,
-    URL_DB_PROPERTY_SCHEMA,
-    EMAIL_DB_PROPERTY_SCHEMA,
-    PHONE_NUMBER_DB_PROPERTY_SCHEMA,
-    FORMULA_DB_PROPERTY_SCHEMA,
-    RELATION_DB_PROPERTY_SCHEMA,
-    ROLLUP_DB_PROPERTY_SCHEMA,
-    CREATED_TIME_DB_PROPERTY_SCHEMA,
-    CREATED_BY_DB_PROPERTY_SCHEMA,
-    LAST_EDITED_TIME_DB_PROPERTY_SCHEMA,
-    LAST_EDITED_BY_DB_PROPERTY_SCHEMA,
-    BUTTON_DB_PROPERTY_SCHEMA,
-    UNIQUE_ID_DB_PROPERTY_SCHEMA,
-    VERIFICATION_DB_PROPERTY_SCHEMA,
-  ])
-  .describe("Union of all possible database property types");
+// Combined database property schema. This is a property *definition* only:
+// the null-deletes-the-property form Notion takes on dataSources.update is
+// added at update_data_source, because create_database (initial_data_source)
+// has no such form and update_database no longer carries properties at all.
+const DATABASE_PROPERTY_UNION = z
+    .discriminatedUnion("type", [
+      TITLE_DB_PROPERTY_SCHEMA,
+      RICH_TEXT_DB_PROPERTY_SCHEMA,
+      NUMBER_DB_PROPERTY_SCHEMA,
+      SELECT_DB_PROPERTY_SCHEMA,
+      MULTI_SELECT_DB_PROPERTY_SCHEMA,
+      DATE_DB_PROPERTY_SCHEMA,
+      PEOPLE_DB_PROPERTY_SCHEMA,
+      FILES_DB_PROPERTY_SCHEMA,
+      CHECKBOX_DB_PROPERTY_SCHEMA,
+      URL_DB_PROPERTY_SCHEMA,
+      EMAIL_DB_PROPERTY_SCHEMA,
+      PHONE_NUMBER_DB_PROPERTY_SCHEMA,
+      FORMULA_DB_PROPERTY_SCHEMA,
+      RELATION_DB_PROPERTY_SCHEMA,
+      ROLLUP_DB_PROPERTY_SCHEMA,
+      CREATED_TIME_DB_PROPERTY_SCHEMA,
+      CREATED_BY_DB_PROPERTY_SCHEMA,
+      LAST_EDITED_TIME_DB_PROPERTY_SCHEMA,
+      LAST_EDITED_BY_DB_PROPERTY_SCHEMA,
+      BUTTON_DB_PROPERTY_SCHEMA,
+      UNIQUE_ID_DB_PROPERTY_SCHEMA,
+      VERIFICATION_DB_PROPERTY_SCHEMA,
+    ])
+    .describe("Union of all possible database property types");
 
-const PROPERTY_RENAME_SCHEMA = z
-  .object({
-    name: z.string().min(1).describe("New property name as it appears in Notion."),
-  })
-  .strict();
-
-const PROPERTY_TYPED_UPDATE_SCHEMA = DATABASE_PROPERTY_TYPE_SCHEMA.and(
-  z.object({
-    name: z
-      .string()
-      .min(1)
-      .optional()
-      .describe("Optional new property name as it appears in Notion."),
-  })
+const DATABASE_PROPERTY_TYPES = new Set<string>(
+  DATABASE_PROPERTY_UNION.options.map((option) => option.shape.type.value)
 );
 
-// Combined database property schema for create-time property definitions.
+// Notion itself takes `{ select: { options } }` without a `type`; the body key
+// says which kind it is. Fill `type` in from the sole body key so a definition
+// needs no more than the API does, but never override an explicit `type`.
+export function inferPropertyDefinitionType(val: unknown): unknown {
+  const v = preprocessJson(val);
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return v;
+  const obj = v as Record<string, unknown>;
+  if (typeof obj.type === "string") return v;
+  const bodies = Object.keys(obj).filter(
+    (k) => DATABASE_PROPERTY_TYPES.has(k) && typeof obj[k] === "object" && obj[k] !== null
+  );
+  return bodies.length === 1 ? { ...obj, type: bodies[0] } : v;
+}
+
 export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
-  preprocessJson,
-  DATABASE_PROPERTY_TYPE_SCHEMA
+  inferPropertyDefinitionType,
+  DATABASE_PROPERTY_UNION
 );
 
-// Data source property update schema. Notion accepts rename-only updates
-// ({ name }) and typed schema updates that may also include name.
-export const DATA_SOURCE_PROPERTY_UPDATE_SCHEMA = z.preprocess(
-  preprocessJson,
-  z
-    .union([PROPERTY_RENAME_SCHEMA, PROPERTY_TYPED_UPDATE_SCHEMA])
-    .describe("Data source property update. Use { name } to rename without changing type.")
-);

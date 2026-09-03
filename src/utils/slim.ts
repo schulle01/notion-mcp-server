@@ -23,6 +23,8 @@ import type {
   UserObjectResponse,
 } from "@notionhq/client";
 
+import { blockFileRef, propertyFileRef, fileRefsEnabled } from "./file-ref.js";
+
 export type PageResponse = PageObjectResponse | PartialPageObjectResponse;
 export type BlockResponse = BlockObjectResponse | PartialBlockObjectResponse;
 export type DatabaseResponse =
@@ -38,11 +40,11 @@ export type CommentResponse =
 
 export type SearchItemResponse = PageResponse | DatabaseResponse | DataSourceResponse;
 
-function extractRichText(rich: readonly RichTextItemResponse[]): string {
+export function extractRichText(rich: readonly RichTextItemResponse[]): string {
   return rich.map((r) => r.plain_text).join("");
 }
 
-function extractTitle(
+export function extractTitle(
   properties: PageObjectResponse["properties"]
 ): string | undefined {
   for (const value of Object.values(properties)) {
@@ -54,8 +56,11 @@ function extractTitle(
 // Flatten a single Notion property to a primitive (or small object) the LLM
 // can read directly. Returns undefined for empty values so the caller can skip
 // them — keeps the response tight for sparsely populated rows.
+type FileRefContext = { pageId: string; property: string };
+
 export function flattenProperty(
-  prop: PageObjectResponse["properties"][string]
+  prop: PageObjectResponse["properties"][string],
+  ctx?: FileRefContext
 ): unknown {
   switch (prop.type) {
     case "title":
@@ -79,9 +84,15 @@ export function flattenProperty(
       return prop.people.length ? prop.people.map((p) => p.id) : undefined;
     case "files":
       return prop.files.length
-        ? prop.files.map((f) => {
+        ? prop.files.map((f, i) => {
             if (f.type === "external") return { name: f.name, url: f.external.url };
-            return { name: f.name, url: f.file.url };
+            // A Notion-hosted file gets a ref when refs are on. An external
+            // url is already short and stable, so it passes through either way.
+            const url =
+              fileRefsEnabled() && ctx
+                ? propertyFileRef(ctx.pageId, ctx.property, i)
+                : f.file.url;
+            return { name: f.name, url };
           })
         : undefined;
     case "checkbox":
@@ -138,13 +149,14 @@ export function flattenProperty(
 }
 
 function flattenProperties(
-  properties: PageObjectResponse["properties"]
+  properties: PageObjectResponse["properties"],
+  pageId: string
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(properties)) {
     // Skip the title prop — already surfaced as `title`.
     if (value.type === "title") continue;
-    const flat = flattenProperty(value);
+    const flat = flattenProperty(value, { pageId, property: name });
     if (flat !== undefined) out[name] = flat;
   }
   return out;
@@ -166,7 +178,7 @@ export function slimPage(
     ...(page.icon ? { icon: page.icon.type } : {}),
   };
   if (!includeProperties) return base;
-  const props = flattenProperties(page.properties);
+  const props = flattenProperties(page.properties, page.id);
   return Object.keys(props).length ? { ...base, properties: props } : base;
 }
 
@@ -188,15 +200,26 @@ export function slimBlock(block: BlockResponse, verbose = false) {
   if (block.type === "code") {
     return { ...base, language: block.code.language };
   }
+  if (block.type === "table_row") {
+    return { ...base, cells: block.table_row.cells.map((cell) => extractRichText(cell)) };
+  }
+  if (block.type === "table") {
+    return { ...base, table_width: block.table.table_width };
+  }
   if (block.type === "image") {
     const img = block.image;
-    const url = img.type === "external" ? img.external.url : img.file.url;
+    const url =
+      img.type === "external"
+        ? img.external.url
+        : fileRefsEnabled()
+          ? blockFileRef(block.id)
+          : img.file.url;
     return { ...base, image: url };
   }
   return base;
 }
 
-function extractBlockText(block: BlockObjectResponse): string | undefined {
+export function extractBlockText(block: BlockObjectResponse): string | undefined {
   // Many block subtypes expose a `rich_text` array under their type key.
   // Read it via a structural narrow so we don't have to enumerate every variant.
   const inner = (block as unknown as Record<string, unknown>)[block.type];
@@ -224,6 +247,24 @@ export function slimDatabase(db: DatabaseResponse, verbose = false) {
   };
 }
 
+const MAX_LISTED_OPTIONS = 30;
+
+/** `select: A | B | C`, `relation → <data_source_id>`, or the bare type. */
+export function describePropertyDef(def: { type: string; [key: string]: unknown }): string {
+  if (def.type === "select" || def.type === "multi_select" || def.type === "status") {
+    const options = (def[def.type] as { options?: { name: string }[] } | undefined)?.options ?? [];
+    if (options.length === 0) return def.type;
+    const names = options.slice(0, MAX_LISTED_OPTIONS).map((o) => o.name);
+    const more = options.length - names.length;
+    return `${def.type}: ${names.join(" | ")}${more > 0 ? ` | +${more} more` : ""}`;
+  }
+  if (def.type === "relation") {
+    const target = (def.relation as { data_source_id?: string } | undefined)?.data_source_id;
+    return target ? `relation → ${target}` : "relation";
+  }
+  return def.type;
+}
+
 export function slimDataSource(ds: DataSourceResponse, verbose = false) {
   if (verbose) return ds;
   if (!isFullDataSource(ds)) return { id: ds.id };
@@ -234,11 +275,11 @@ export function slimDataSource(ds: DataSourceResponse, verbose = false) {
     title: extractRichText(ds.title),
     ...(description ? { description } : {}),
     parent: ds.parent,
-    // name → property-type map. Same byte cost as a name-only array but the
-    // type info is what query_database planners actually need (otherwise
-    // callers would have to drop verbose:true just to learn types).
+    // name → property-type map, with the option names for select-like
+    // properties and the target of a relation: exactly what a caller needs to
+    // write a row or a filter without a verbose:true round-trip.
     properties: Object.fromEntries(
-      Object.entries(ds.properties).map(([name, def]) => [name, def.type])
+      Object.entries(ds.properties).map(([name, def]) => [name, describePropertyDef(def)])
     ),
     ...(ds.icon ? { icon: ds.icon.type } : {}),
     ...(ds.in_trash ? { in_trash: true } : {}),

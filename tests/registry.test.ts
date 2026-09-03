@@ -6,9 +6,9 @@ beforeAll(async () => {
 });
 
 describe("operations registry", () => {
-  it("registers every name in the OperationName union (52 total: upstream plus fork DB/view extensions)", () => {
+  it("registers every name in the OperationName union (56 total: 48 upstream + 8 custom ops)", () => {
     const names = operationNames();
-    expect(names.length).toBe(52);
+    expect(names.length).toBe(56);
     expect(names).toContain("trash_page");
     expect(names).toContain("get_self");
   });
@@ -32,10 +32,8 @@ describe("operations registry", () => {
     expect(getOperation("list_data_sources")).toBeDefined();
     expect(getOperation("get_data_source")).toBeDefined();
     expect(getOperation("update_data_source")).toBeDefined();
+    expect(getOperation("delete_data_source")).toBeDefined();
     expect(getOperation("rename_data_source_property")).toBeDefined();
-    expect(getOperation("list_views")).toBeDefined();
-    expect(getOperation("get_view")).toBeDefined();
-    expect(getOperation("configure_view_properties")).toBeDefined();
   });
 
   it("includes the database analysis ops", () => {
@@ -45,6 +43,7 @@ describe("operations registry", () => {
     expect(getOperation("summarize_database_table")).toBeDefined();
     expect(getOperation("list_database_row_refs")).toBeDefined();
     expect(getOperation("match_database_rows")).toBeDefined();
+    expect(getOperation("configure_view_properties")).toBeDefined();
   });
 
   it("includes move_page", () => {

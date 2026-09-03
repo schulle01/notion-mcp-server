@@ -1,16 +1,19 @@
 import { z } from "zod";
-import { isFullDatabase } from "@notionhq/client";
+import { isFullDatabase, isFullDataSource } from "@notionhq/client";
 import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
 import { slimDataSource } from "../utils/slim.js";
-import { DATA_SOURCE_PROPERTY_UPDATE_SCHEMA } from "../schema/database.js";
+import type { DataSourceResponse } from "../utils/slim.js";
+import { DATABASE_PROPERTY_SCHEMA } from "../schema/database.js";
 import { asSdk, type UpdateDataSourceBody } from "../utils/notion-types.js";
+import { notionId } from "../schema/id.js";
+import { forgetDataSourceSchema, rememberDataSourceSchema } from "../services/schema-cache.js";
 
 const VERBOSE = z.boolean().optional();
 
 const ListDataSourcesParams = z.object({
-  database_id: z.string().describe("Database ID to list data sources for."),
+  database_id: notionId().describe("Database ID to list data sources for."),
   verbose: VERBOSE,
 });
 
@@ -39,7 +42,7 @@ register({
 });
 
 const GetDataSourceParams = z.object({
-  data_source_id: z.string(),
+  data_source_id: notionId(),
   verbose: VERBOSE,
 });
 
@@ -51,9 +54,9 @@ function decodePropertyRef(ref: string): string {
   }
 }
 
-function getDataSourceProperties(ds: unknown): Record<string, unknown> {
-  if (typeof ds !== "object" || ds === null) return {};
-  const properties = (ds as { properties?: unknown }).properties;
+function getDataSourceProperties(dataSource: unknown): Record<string, unknown> {
+  if (typeof dataSource !== "object" || dataSource === null) return {};
+  const properties = (dataSource as { properties?: unknown }).properties;
   if (typeof properties !== "object" || properties === null) return {};
   return properties as Record<string, unknown>;
 }
@@ -82,33 +85,23 @@ function findPropertyByRef(
   return undefined;
 }
 
-function collectRenameRequests(
-  properties: Record<string, unknown> | undefined
-): { property: string; name: string }[] {
-  if (!properties) return [];
-  return Object.entries(properties).flatMap(([property, config]) => {
-    if (typeof config !== "object" || config === null) return [];
-    const name = (config as { name?: unknown }).name;
-    return typeof name === "string" && name.length > 0 ? [{ property, name }] : [];
-  });
-}
-
-async function verifyRenameRequests(
-  data_source_id: string,
-  renames: { property: string; name: string }[]
-): Promise<{ ok: true; dataSource: unknown } | { ok: false; property: string; name: string }> {
+async function verifyPropertyRename(
+  dataSourceId: string,
+  property: string,
+  name: string
+): Promise<{ ok: true; dataSource: unknown } | { ok: false }> {
   const notion = await getClient();
-  const ds = await notion.dataSources.retrieve({ data_source_id });
-  const properties = getDataSourceProperties(ds);
-  for (const rename of renames) {
-    const byNewName = findPropertyByRef(properties, rename.name);
-    const byOriginalRef = findPropertyByRef(properties, rename.property);
-    if (byNewName && (!byOriginalRef || byOriginalRef.currentName === rename.name || byOriginalRef.id === byNewName.id)) {
-      continue;
-    }
-    return { ok: false, ...rename };
+  const dataSource = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
+  const properties = getDataSourceProperties(dataSource);
+  const byNewName = findPropertyByRef(properties, name);
+  const byOriginalRef = findPropertyByRef(properties, property);
+  if (
+    byNewName &&
+    (!byOriginalRef || byOriginalRef.currentName === name || byOriginalRef.id === byNewName.id)
+  ) {
+    return { ok: true, dataSource };
   }
-  return { ok: true, dataSource: ds };
+  return { ok: false };
 }
 
 register({
@@ -128,7 +121,7 @@ register({
 });
 
 const ListDataSourceTemplatesParams = z.object({
-  data_source_id: z.string().describe("Data source ID to list templates for."),
+  data_source_id: notionId().describe("Data source ID to list templates for."),
   name: z.string().optional().describe("Case-insensitive substring filter on template name."),
   start_cursor: z.string().optional(),
   page_size: z.number().int().min(1).max(100).optional(),
@@ -157,13 +150,49 @@ register({
   }),
 });
 
+// ──────────────────────────────────────────────────────────────────────────
+// update_data_source / delete_data_source
+// ──────────────────────────────────────────────────────────────────────────
+
 const UpdateDataSourceParams = z.object({
-  data_source_id: z.string(),
+  data_source_id: notionId(),
   title: z.array(z.unknown()).optional().describe("Rich text array for the data source title."),
-  properties: z.record(z.string(), DATA_SOURCE_PROPERTY_UPDATE_SCHEMA).optional(),
+  // dataSources.update is the one endpoint where a property may be null: that
+  // deletes the property. create_database's initial_data_source has no such
+  // form, so the nullable lives here rather than on DATABASE_PROPERTY_SCHEMA.
+  properties: z
+    .record(
+      z.string(),
+      DATABASE_PROPERTY_SCHEMA.nullable().describe(
+        "A property definition, or null to delete the property."
+      )
+    )
+    .optional()
+    .describe(
+      "Map of property name → definition. Set a property to null to delete it from the data source, together with its values on every page."
+    ),
   icon: z.unknown().optional(),
-  archived: z.boolean().optional().describe("Deprecated alias for in_trash (removed on the 2026-03-11 surface). Routed to in_trash."),
-  in_trash: z.boolean().optional(),
+  in_trash: z
+    .boolean()
+    .optional()
+    .describe("Not accepted here — trashing is destructive and lives on delete_data_source (in_trash:false restores). Rejected here so the split is explicit."),
+  archived: z
+    .boolean()
+    .optional()
+    .describe("Deprecated alias for `in_trash`; not accepted here either. Call delete_data_source instead."),
+  verbose: VERBOSE,
+});
+
+const DeleteDataSourceParams = z.object({
+  data_source_id: notionId(),
+  in_trash: z
+    .boolean()
+    .optional()
+    .describe("Default true. Pass false to restore a data source from trash."),
+  archived: z
+    .boolean()
+    .optional()
+    .describe("Deprecated alias for `in_trash` (removed on the 2026-03-11 surface). Routed to `in_trash`."),
   verbose: VERBOSE,
 });
 
@@ -171,53 +200,55 @@ register({
   name: "update_data_source",
   access: "write",
   domain: "data_sources",
-  description: "Update a data source's schema (properties, title, icon). Property updates may include name for renames. For database-level metadata use update_database.",
+  description: "Update a data source's schema (properties, title, icon). For database-level metadata use update_database. To trash or restore a data source use delete_data_source.",
   batchable: true,
   schema: UpdateDataSourceParams,
   example: {
     data_source_id: "<data-source-id>",
     properties: {
-      "Old property name or ID": { name: "New property name" },
-      Status: { type: "status", status: { options: [] } },
+      // The API cannot create `status` property schemas; use select/multi_select.
+      Priority: {
+        type: "select",
+        select: { options: [{ name: "High", color: "red" }, { name: "Low", color: "gray" }] },
+      },
     },
   },
   handler: tryHandler(async ({ data_source_id, title, properties, icon, archived, in_trash, verbose }) => {
+    // Kept in the schema (rather than dropped) so a stale caller gets an error
+    // pointing at delete_data_source instead of a silent no-op: z.object strips
+    // unknown keys, so an absent field would make `{ in_trash: true }` succeed
+    // with the data source untouched.
+    if (in_trash !== undefined || archived !== undefined) {
+      return {
+        ok: false,
+        error: {
+          code: "trash_moved",
+          message: "in_trash / archived are no longer accepted on update_data_source — trashing is a destructive operation and lives on delete_data_source.",
+          fix: "Call delete_data_source with the same data_source_id. It trashes by default; pass in_trash:false to restore.",
+        },
+      };
+    }
     const notion = await getClient();
-    const renames = collectRenameRequests(properties);
-    // `archived` was removed on the 2026-03-11 surface; route the legacy alias
-    // into `in_trash` so we never send a field the API rejects.
-    const trash = in_trash ?? archived;
     const body = {
       data_source_id,
       ...(title !== undefined ? { title } : {}),
       ...(properties !== undefined ? { properties } : {}),
       ...(icon !== undefined ? { icon } : {}),
-      ...(trash !== undefined ? { in_trash: trash } : {}),
     };
     const response = await notion.dataSources.update(asSdk<UpdateDataSourceBody>(body));
-    let data = response;
-    if (renames.length > 0) {
-      const verified = await verifyRenameRequests(data_source_id, renames);
-      if (!verified.ok) {
-        return {
-          ok: false,
-          error: {
-            code: "rename_not_verified",
-            message: `Notion accepted update_data_source, but property "${verified.property}" was not verified as "${verified.name}".`,
-            fix: "Use rename_data_source_property for a focused rename, then call get_data_source with verbose:true to inspect the current schema.",
-          },
-        };
-      }
-      data = verified.dataSource as typeof response;
-    }
-    return { ok: true, data: slimDataSource(data, verbose ?? false) };
+    // The property schema may just have changed; the write and filter paths
+    // read it from the cache.
+    if (response && isFullDataSource(response)) rememberDataSourceSchema(response);
+    else forgetDataSourceSchema(data_source_id);
+    return { ok: true, data: slimDataSource(response, verbose ?? false) };
   }),
 });
 
 const RenameDataSourcePropertyParams = z.object({
-  data_source_id: z.string(),
+  data_source_id: notionId(),
   property: z
     .string()
+    .min(1)
     .describe("Existing property name or property ID. Encoded Notion property IDs such as %7CcNF are accepted."),
   name: z.string().min(1).describe("New property name as it should appear in Notion."),
   verbose: VERBOSE,
@@ -227,7 +258,8 @@ register({
   name: "rename_data_source_property",
   access: "write",
   domain: "data_sources",
-  description: "Rename one data source property by existing property name or ID, then verify the schema changed. Does not alter property type or options.",
+  description:
+    "Rename one data source property by existing property name or ID, then verify the schema changed. Does not alter property type or options.",
   batchable: true,
   schema: RenameDataSourcePropertyParams,
   example: {
@@ -246,13 +278,13 @@ register({
     await notion.dataSources.update(
       asSdk<UpdateDataSourceBody>({
         data_source_id,
-        properties: {
-          [property]: { name },
-        },
+        properties: { [property]: { name } },
       })
     );
-    const verified = await verifyRenameRequests(data_source_id, [{ property, name }]);
+
+    const verified = await verifyPropertyRename(data_source_id, property, name);
     if (!verified.ok) {
+      forgetDataSourceSchema(data_source_id);
       return {
         ok: false,
         error: {
@@ -262,16 +294,41 @@ register({
         },
       };
     }
+
+    const verifiedDataSource = verified.dataSource as DataSourceResponse;
+    if (isFullDataSource(verifiedDataSource)) rememberDataSourceSchema(verifiedDataSource);
+    else forgetDataSourceSchema(data_source_id);
     return {
       ok: true,
       data: verbose
-        ? verified.dataSource
-        : {
-            data_source_id,
-            property,
-            name,
-            verified: true,
-          },
+        ? verifiedDataSource
+        : { data_source_id, property, name, verified: true },
     };
+  }),
+});
+
+register({
+  name: "delete_data_source",
+  access: "write",
+  domain: "data_sources",
+  destructive: true,
+  description: "Move a data source to trash, with every page in it. Reversible: pass in_trash:false to restore. To trash the whole database use delete_database.",
+  batchable: true,
+  schema: DeleteDataSourceParams,
+  example: { data_source_id: "<data-source-id>" },
+  exampleBatch: {
+    items: [{ data_source_id: "<data-source-id-1>" }, { data_source_id: "<data-source-id-2>" }],
+  },
+  handler: tryHandler(async ({ data_source_id, in_trash, archived, verbose }) => {
+    const notion = await getClient();
+    // `archived` was removed on the 2026-03-11 surface; route the legacy alias
+    // into `in_trash` so we never send a field the API rejects.
+    const response = await notion.dataSources.update(
+      asSdk<UpdateDataSourceBody>({
+        data_source_id,
+        in_trash: in_trash ?? archived ?? true,
+      })
+    );
+    return { ok: true, data: slimDataSource(response, verbose ?? false) };
   }),
 });

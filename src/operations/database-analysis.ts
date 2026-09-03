@@ -2,6 +2,8 @@ import { isFullDatabase } from "@notionhq/client";
 import { z } from "zod";
 import { getClient } from "../services/notion.js";
 import { WHERE_SCHEMA, compileWhere } from "../schema/filter-dsl.js";
+import { notionId } from "../schema/id.js";
+import { getDataSourceSchema } from "../services/schema-cache.js";
 import { flattenProperty } from "../utils/slim.js";
 import { asSdk, type QueryDataSourceBody } from "../utils/notion-types.js";
 import { tryHandler } from "../utils/handler.js";
@@ -21,8 +23,8 @@ const SelectSchema = z.array(z.string().min(1)).min(1).optional();
 
 const BaseScanParams = z
   .object({
-    database_id: z.string().optional(),
-    data_source_id: z.string().optional(),
+    database_id: notionId().optional(),
+    data_source_id: notionId().optional(),
     where: WHERE_SCHEMA.optional(),
     filter: z.unknown().optional(),
     sorts: z.array(z.unknown()).optional(),
@@ -45,8 +47,8 @@ const QueryDatabaseTableParams = BaseScanParams.extend({
 
 const InspectDatabaseCompactParams = z
   .object({
-    database_id: z.string().optional(),
-    data_source_id: z.string().optional(),
+    database_id: notionId().optional(),
+    data_source_id: notionId().optional(),
   })
   .strict()
   .refine((v) => Boolean(v.database_id) !== Boolean(v.data_source_id), {
@@ -141,8 +143,20 @@ async function resolveDataSourceId(params: Pick<ScanParams, "database_id" | "dat
   return { ok: true as const, data_source_id: sources[0].id };
 }
 
-function compileScanFilter(params: Pick<ScanParams, "where" | "filter">) {
-  if (params.where !== undefined) return compileWhere(params.where);
+async function compileScanFilter(
+  params: Pick<ScanParams, "where" | "filter">,
+  dataSourceId: string
+) {
+  if (params.where !== undefined) {
+    let types: Awaited<ReturnType<typeof getDataSourceSchema>> | undefined;
+    try {
+      const schema = await getDataSourceSchema(dataSourceId);
+      if (Object.keys(schema).length > 0) types = schema;
+    } catch {
+      types = undefined;
+    }
+    return compileWhere(params.where, types);
+  }
   return params.filter;
 }
 
@@ -155,7 +169,7 @@ async function scanRows(
 
   let compiledFilter: unknown;
   try {
-    compiledFilter = compileScanFilter(params);
+    compiledFilter = await compileScanFilter(params, resolved.data_source_id);
   } catch (err) {
     return {
       ok: false,
@@ -227,11 +241,16 @@ function isPageLike(value: unknown): value is PageLike {
   return typeof value === "object" && value !== null && (value as PageLike).object === "page";
 }
 
+function flattenPageProperty(page: PageLike, name: string, property: unknown): unknown {
+  const context = page.id ? { pageId: page.id, property: name } : undefined;
+  return flattenProperty(property as Parameters<typeof flattenProperty>[0], context);
+}
+
 function pageTitle(page: PageLike): string | undefined {
   const properties = page.properties ?? {};
-  for (const prop of Object.values(properties)) {
+  for (const [name, prop] of Object.entries(properties)) {
     if (propertyType(prop) === "title") {
-      const title = flattenProperty(prop as Parameters<typeof flattenProperty>[0]);
+      const title = flattenPageProperty(page, name, prop);
       return typeof title === "string" && title ? title : undefined;
     }
   }
@@ -255,7 +274,7 @@ function projectProperties(page: PageLike, select?: string[]): Record<string, un
   for (const name of propertyNames(page, select)) {
     const prop = properties[name];
     if (prop === undefined) continue;
-    const flat = flattenProperty(prop as Parameters<typeof flattenProperty>[0]);
+    const flat = flattenPageProperty(page, name, prop);
     if (flat !== undefined) out[name] = flat;
   }
   return out;
@@ -283,7 +302,7 @@ function valueLabel(value: unknown): string {
 function groupValue(page: PageLike, name: string): unknown {
   const prop = page.properties?.[name];
   if (prop === undefined) return null;
-  return flattenProperty(prop as Parameters<typeof flattenProperty>[0]) ?? null;
+  return flattenPageProperty(page, name, prop) ?? null;
 }
 
 function compactTitle(value: unknown): string | undefined {
@@ -342,7 +361,7 @@ function searchableValues(page: PageLike, properties?: string[]): unknown[] {
   const names = properties ?? Object.keys(page.properties ?? {});
   return names.map((name) => {
     const prop = page.properties?.[name];
-    return prop === undefined ? undefined : flattenProperty(prop as Parameters<typeof flattenProperty>[0]);
+    return prop === undefined ? undefined : flattenPageProperty(page, name, prop);
   });
 }
 
@@ -363,26 +382,25 @@ register({
   description: "Inspect a database data source schema in a compact, token-efficient shape.",
   batchable: false,
   schema: InspectDatabaseCompactParams,
-  example: {
-    data_source_id: "<data-source-id>",
-  },
+  example: { data_source_id: "<data-source-id>" },
   handler: tryHandler(async (params: InspectParams): Promise<OperationResult<unknown>> => {
     const resolved = await resolveDataSourceId(params);
     if (!resolved.ok) return resolved;
     const notion = await getClient();
     const ds = await notion.dataSources.retrieve({ data_source_id: resolved.data_source_id });
-    const record = typeof ds === "object" && ds !== null ? (ds as Record<string, unknown>) : {};
+    const record = typeof ds === "object" && ds !== null ? (ds as unknown as Record<string, unknown>) : {};
     const rawProperties = record.properties;
     const properties =
       typeof rawProperties === "object" && rawProperties !== null
         ? compactPropertySchema(rawProperties as Record<string, unknown>)
         : [];
+    const title = compactTitle(record);
     return {
       ok: true,
       data: {
         data_source_id: resolved.data_source_id,
         ...(typeof record.id === "string" ? { id: record.id } : {}),
-        ...(compactTitle(record) ? { title: compactTitle(record) } : {}),
+        ...(title ? { title } : {}),
         property_count: properties.length,
         properties,
       },
@@ -507,7 +525,7 @@ register({
       const counts = new Map<string, { value: unknown; count: number; label: string }>();
       for (const row of rows) {
         const prop = row.properties?.[name];
-        const value = prop === undefined ? undefined : flattenProperty(prop as Parameters<typeof flattenProperty>[0]);
+        const value = prop === undefined ? undefined : flattenPageProperty(row, name, prop);
         if (value === undefined || (Array.isArray(value) && value.length === 0)) {
           empty += 1;
           continue;
@@ -582,7 +600,8 @@ register({
   name: "match_database_rows",
   access: "read",
   domain: "databases",
-  description: "Find compact row references whose selected or all flattened properties contain a text query, without returning full rows.",
+  description:
+    "Find compact row references whose selected or all flattened properties contain a text query, without returning full rows.",
   batchable: false,
   schema: MatchDatabaseRowsParams,
   example: {

@@ -28,10 +28,12 @@ export type OperationName =
   | "list_database_row_refs"
   | "match_database_rows"
   | "update_database"
+  | "delete_database"
   | "list_data_sources"
   | "get_data_source"
   | "update_data_source"
   | "rename_data_source_property"
+  | "delete_data_source"
   | "list_data_source_templates"
   | "list_views"
   | "get_view"
@@ -52,7 +54,9 @@ export type OperationName =
   | "get_self"
   | "upload_file"
   | "list_file_uploads"
-  | "get_file_upload";
+  | "get_file_upload"
+  | "get_file_url"
+  | "get_image";
 
 export type OperationAccess = "read" | "write";
 
@@ -67,7 +71,7 @@ export type OperationDomain =
   | "views";
 
 export type OperationResult<T = unknown> =
-  | { ok: true; data: T }
+  | { ok: true; data: T; warnings?: string[] }
   | { ok: false; error: OperationError };
 
 export type OperationError = {
@@ -78,7 +82,7 @@ export type OperationError = {
 };
 
 export type BatchItemResult<T = unknown> =
-  | { index: number; ok: true; data: T }
+  | { index: number; ok: true; data: T; warnings?: string[] }
   | { index: number; ok: false; error: OperationError };
 
 export type BatchResult<T = unknown> = {
@@ -86,6 +90,8 @@ export type BatchResult<T = unknown> = {
   summary: { total: number; succeeded: number; failed: number };
   results: BatchItemResult<T>[];
   rolled_back?: number;
+  /** Non-fatal notes about the envelope, e.g. an unknown top-level field that was ignored. */
+  warnings?: string[];
 };
 
 export type BatchEnvelope<T> = {
