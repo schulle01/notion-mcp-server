@@ -112,7 +112,7 @@ Your AI calls `notion_write` and replies with a live page link.
 - *"Upload this diagram to the design page."* — single- and multi-part file uploads
 - *"Look at the screenshot on that bug report and tell me what's wrong."* — `get_image` hands the model the picture itself
 
-Full capability list in [Features](#-features-what-this-notion-mcp-server-does); the complete operation catalog (47 ops) is in the [Operations menu](#operations-menu-47-ops-plus-one-alias).
+Full capability list in [Features](#-features-what-this-notion-mcp-server-does); the complete operation catalog (55 ops) is in the [Operations menu](#operations-menu-55-ops-plus-one-alias).
 
 ## 🧭 Which Notion MCP should you use?
 
@@ -132,7 +132,7 @@ If you just want to chat with your Notion in claude.ai's web UI, use Notion's ho
 | Capability | Official Notion MCP (open source) | **This server** |
 | --- | --- | --- |
 | **Tool surface** | 24 tools (one per endpoint), 17,163 tokens loaded into context | **3 tools**, 1,005 tokens — [94% less schema at connection](./benchmarks) |
-| **Operations covered** | ~24 endpoints | **47 operations** (plus a `trash_page` alias) across pages, blocks, databases, data sources, views, templates, comments, users, files |
+| **Operations covered** | ~24 endpoints | **55 operations** (plus a `trash_page` alias) across pages, blocks, databases, data sources, views, templates, comments, users, files |
 | **Batch mutations** | Not documented | ✅ Universal `{ items: [...] }` envelope; up to **10 in parallel** |
 | **Atomic batches + rollback** | Not documented | ✅ `atomic: true` aborts on first failure, best-effort archives entities created earlier |
 | **Idempotency** | Not documented | ✅ `idempotency_key` — same key + op returns the cached result for 5 minutes |
@@ -149,7 +149,7 @@ If you just want to chat with your Notion in claude.ai's web UI, use Notion's ho
 **Real-world impact:**
 
 - **Renaming 50 pages** — one `notion_write` call with `{ items: [...], concurrency: 10 }` instead of 50 separate tool calls through the agent's reasoning loop: roughly an order of magnitude faster, and the prompt-token savings are the bigger win.
-- **Tool list in context** — 3 schema blobs per conversation instead of ~24, no matter which of the 47 operations get called; the operation menu ships inside them as enums, so the model never has to read a resource to learn what exists.
+- **Tool list in context** — 3 schema blobs per conversation instead of ~24, no matter which of the 55 operations get called; the operation menu ships inside them as enums, so the model never has to read a resource to learn what exists.
 - **Reading a 100-row database** — flattened rows are typically **5–10× fewer tokens** than the raw `properties` bag, with no information loss.
 
 </details>
@@ -444,7 +444,7 @@ services:
 
 ## 📚 MCP tools (`notion_read`, `notion_write` & `notion_describe`)
 
-The server exposes exactly **three** MCP tools — your client loads three schemas regardless of which of the 47 operations gets called. `notion_read` runs the read operations and `notion_write` the write operations; each tool's `operation` field is an enum of exactly the operations enabled on this server, so the menu ships with the tool list, a client can validate a call before sending it, and a name sent to the wrong tool fails in one round-trip with a message naming the right one.
+The server exposes exactly **three** MCP tools — your client loads three schemas regardless of which of the 55 operations gets called. `notion_read` runs the read operations and `notion_write` the write operations; each tool's `operation` field is an enum of exactly the operations enabled on this server, so the menu ships with the tool list, a client can validate a call before sending it, and a name sent to the wrong tool fails in one round-trip with a message naming the right one.
 
 ### Per-tool permissions
 
@@ -551,7 +551,7 @@ Returns the JSON Schema + working example for one operation, plus `tool` (which 
 { "operation": "query_database" }
 ```
 
-### Operations menu (47 ops, plus one alias)
+### Operations menu (55 ops, plus one alias)
 
 Read operations (`get_*`, `list_*`, `search_pages`, `query_database`, `query_view`) go through `notion_read`; everything else through `notion_write`. The `notion://operations` resource lists the tool next to each operation.
 
@@ -559,9 +559,9 @@ Read operations (`get_*`, `list_*`, `search_pages`, `query_database`, `query_vie
 | --- | --- |
 | **Pages** | `create_page`, `get_page`, `set_page_title`, `set_page_property`, `set_page_properties`, `archive_page` (alias: `trash_page`), `restore_page`, `search_pages`, `move_page`, `get_page_markdown`, `update_page_markdown` |
 | **Blocks** | `append_blocks`, `get_block`, `get_block_children`, `update_block`, `delete_block`, `batch_mixed_blocks` |
-| **Databases** | `create_database`, `query_database`, `update_database`, `delete_database` |
-| **Data sources** | `list_data_sources`, `get_data_source`, `update_data_source`, `delete_data_source`, `list_data_source_templates` |
-| **Views** | `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view` |
+| **Databases** | `create_database`, `query_database`, `inspect_database_compact`, `query_database_table`, `aggregate_database_table`, `summarize_database_table`, `list_database_row_refs`, `match_database_rows`, `update_database`, `delete_database` |
+| **Data sources** | `list_data_sources`, `get_data_source`, `update_data_source`, `rename_data_source_property`, `delete_data_source`, `list_data_source_templates` |
+| **Views** | `list_views`, `get_view`, `configure_view_properties`, `query_view`, `create_view`, `update_view`, `delete_view` |
 | **Comments** | `list_comments`, `add_page_comment`, `add_discussion_comment`, `get_comment`, `update_comment`, `delete_comment` |
 | **Users** | `list_users`, `get_user`, `get_bot_user`, `get_self` |
 | **Files** | `upload_file`, `list_file_uploads`, `get_file_upload`, `get_file_url`, `get_image` |
@@ -606,7 +606,7 @@ See the [Quick start](#-quick-start): get a PAT at [app.notion.com/developers/to
 
 ### What's the difference between this and Notion's official MCP?
 
-Notion's **hosted** MCP (`mcp.notion.com`) is OAuth-only and built for interactive chat — it can't run headless (Notion says non-interactive authorization is in the works, but not yet). Their **open-source** server is, in Notion's words, "no longer actively maintained" and exposes one tool per endpoint. This server authenticates with a token (works in CI/automation), exposes 2 tools dispatching 47 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. See [Which Notion MCP should you use?](#-which-notion-mcp-should-you-use).
+Notion's **hosted** MCP (`mcp.notion.com`) is OAuth-only and built for interactive chat — it can't run headless (Notion says non-interactive authorization is in the works, but not yet). Their **open-source** server is, in Notion's words, "no longer actively maintained" and exposes one tool per endpoint. This server authenticates with a token (works in CI/automation), exposes 2 tools dispatching 55 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. See [Which Notion MCP should you use?](#-which-notion-mcp-should-you-use).
 
 ### Can I use it with Cursor, VS Code, ChatGPT, or Cline?
 

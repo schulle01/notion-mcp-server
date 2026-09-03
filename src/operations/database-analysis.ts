@@ -2,6 +2,7 @@ import { isFullDatabase } from "@notionhq/client";
 import { z } from "zod";
 import { getClient } from "../services/notion.js";
 import { WHERE_SCHEMA, compileWhere } from "../schema/filter-dsl.js";
+import { notionId } from "../schema/id.js";
 import { flattenProperty } from "../utils/slim.js";
 import { asSdk, type QueryDataSourceBody } from "../utils/notion-types.js";
 import { tryHandler } from "../utils/handler.js";
@@ -21,8 +22,8 @@ const SelectSchema = z.array(z.string().min(1)).min(1).optional();
 
 const BaseScanParams = z
   .object({
-    database_id: z.string().optional(),
-    data_source_id: z.string().optional(),
+    database_id: notionId().optional(),
+    data_source_id: notionId().optional(),
     where: WHERE_SCHEMA.optional(),
     filter: z.unknown().optional(),
     sorts: z.array(z.unknown()).optional(),
@@ -43,6 +44,16 @@ const QueryDatabaseTableParams = BaseScanParams.extend({
   select: SelectSchema,
 }).strict();
 
+const InspectDatabaseCompactParams = z
+  .object({
+    database_id: notionId().optional(),
+    data_source_id: notionId().optional(),
+  })
+  .strict()
+  .refine((v) => Boolean(v.database_id) !== Boolean(v.data_source_id), {
+    message: "Pass exactly one of `database_id` or `data_source_id`.",
+  });
+
 const AggregateDatabaseTableParams = BaseScanParams.extend({
   group_by: z.array(z.string().min(1)).min(1).optional(),
 }).strict();
@@ -56,11 +67,19 @@ const ListDatabaseRowRefsParams = BaseScanParams.extend({
   select: SelectSchema,
 }).strict();
 
+const MatchDatabaseRowsParams = BaseScanParams.extend({
+  query: z.string().min(1),
+  properties: z.array(z.string().min(1)).min(1).optional(),
+  select: SelectSchema,
+}).strict();
+
 type ScanParams = z.infer<typeof BaseScanParams>;
 type TableParams = z.infer<typeof QueryDatabaseTableParams>;
+type InspectParams = z.infer<typeof InspectDatabaseCompactParams>;
 type AggregateParams = z.infer<typeof AggregateDatabaseTableParams>;
 type SummaryParams = z.infer<typeof SummarizeDatabaseTableParams>;
 type RowRefsParams = z.infer<typeof ListDatabaseRowRefsParams>;
+type MatchRowsParams = z.infer<typeof MatchDatabaseRowsParams>;
 
 type PageLike = {
   object?: string;
@@ -268,8 +287,113 @@ function groupValue(page: PageLike, name: string): unknown {
   return flattenProperty(prop as Parameters<typeof flattenProperty>[0]) ?? null;
 }
 
+function compactTitle(value: unknown): string | undefined {
+  const rawTitle = (value as { title?: unknown })?.title;
+  if (!Array.isArray(rawTitle)) return undefined;
+  const text = rawTitle
+    .map((part) => {
+      if (typeof part !== "object" || part === null) return "";
+      const plain = (part as { plain_text?: unknown }).plain_text;
+      return typeof plain === "string" ? plain : "";
+    })
+    .join("");
+  return text || undefined;
+}
+
+function compactOptions(config: Record<string, unknown>) {
+  const typed = config[config.type as string];
+  if (typeof typed !== "object" || typed === null) return undefined;
+  const options = (typed as { options?: unknown }).options;
+  if (!Array.isArray(options)) return undefined;
+  return options.map((option) => {
+    const item = option as { id?: unknown; name?: unknown; color?: unknown };
+    return {
+      ...(typeof item.id === "string" ? { id: item.id } : {}),
+      ...(typeof item.name === "string" ? { name: item.name } : {}),
+      ...(typeof item.color === "string" ? { color: item.color } : {}),
+    };
+  });
+}
+
+function compactPropertySchema(properties: Record<string, unknown>) {
+  return Object.entries(properties).map(([name, value]) => {
+    const config = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+    const type = typeof config.type === "string" ? config.type : "unknown";
+    const options = compactOptions(config);
+    return {
+      name,
+      ...(typeof config.id === "string" ? { id: config.id } : {}),
+      type,
+      ...(options ? { options } : {}),
+    };
+  });
+}
+
+function rowRef(page: PageLike, select?: string[]) {
+  const title = pageTitle(page);
+  return {
+    page_id: page.id,
+    ...(page.url ? { page_url: page.url } : {}),
+    ...(title ? { title } : {}),
+    ...(select ? { properties: projectProperties(page, select) } : {}),
+  };
+}
+
+function searchableValues(page: PageLike, properties?: string[]): unknown[] {
+  const names = properties ?? Object.keys(page.properties ?? {});
+  return names.map((name) => {
+    const prop = page.properties?.[name];
+    return prop === undefined ? undefined : flattenProperty(prop as Parameters<typeof flattenProperty>[0]);
+  });
+}
+
+function matchesTextQuery(page: PageLike, query: string, properties?: string[]): boolean {
+  const needle = query.toLowerCase();
+  const values = [pageTitle(page), ...searchableValues(page, properties)];
+  return values.some((value) => {
+    if (value === undefined || value === null) return false;
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    return text.toLowerCase().includes(needle);
+  });
+}
+
+register({
+  name: "inspect_database_compact",
+  access: "read",
+  domain: "data_sources",
+  description: "Inspect a database data source schema in a compact, token-efficient shape.",
+  batchable: false,
+  schema: InspectDatabaseCompactParams,
+  example: { data_source_id: "<data-source-id>" },
+  handler: tryHandler(async (params: InspectParams): Promise<OperationResult<unknown>> => {
+    const resolved = await resolveDataSourceId(params);
+    if (!resolved.ok) return resolved;
+    const notion = await getClient();
+    const ds = await notion.dataSources.retrieve({ data_source_id: resolved.data_source_id });
+    const record = typeof ds === "object" && ds !== null ? (ds as unknown as Record<string, unknown>) : {};
+    const rawProperties = record.properties;
+    const properties =
+      typeof rawProperties === "object" && rawProperties !== null
+        ? compactPropertySchema(rawProperties as Record<string, unknown>)
+        : [];
+    const title = compactTitle(record);
+    return {
+      ok: true,
+      data: {
+        data_source_id: resolved.data_source_id,
+        ...(typeof record.id === "string" ? { id: record.id } : {}),
+        ...(title ? { title } : {}),
+        property_count: properties.length,
+        properties,
+      },
+    };
+  }),
+});
+
 register({
   name: "query_database_table",
+  access: "read",
+  domain: "databases",
   description: "Read a database data source as projected table rows with filter, sort, pagination, and measurement metadata.",
   batchable: false,
   schema: QueryDatabaseTableParams,
@@ -302,6 +426,8 @@ register({
 
 register({
   name: "aggregate_database_table",
+  access: "read",
+  domain: "databases",
   description: "Count database rows, optionally grouped by one or more properties, without returning row payloads.",
   batchable: false,
   schema: AggregateDatabaseTableParams,
@@ -357,6 +483,8 @@ register({
 
 register({
   name: "summarize_database_table",
+  access: "read",
+  domain: "databases",
   description: "Summarize selected or all database properties with present/empty counts and top values, without returning full rows.",
   batchable: false,
   schema: SummarizeDatabaseTableParams,
@@ -419,6 +547,8 @@ register({
 
 register({
   name: "list_database_row_refs",
+  access: "read",
+  domain: "databases",
   description: "List compact database row references for navigation or read-only write planning.",
   batchable: false,
   schema: ListDatabaseRowRefsParams,
@@ -434,15 +564,46 @@ register({
     return {
       ok: true,
       data: {
-        results: rows.map((row) => {
-          const title = pageTitle(row);
-          return {
-            page_id: row.id,
-            ...(row.url ? { page_url: row.url } : {}),
-            ...(title ? { title } : {}),
-            ...(params.select ? { properties: projectProperties(row, params.select) } : {}),
-          };
-        }),
+        results: rows.map((row) => rowRef(row, params.select)),
+        has_more: meta.has_more,
+        next_cursor: meta.next_cursor,
+        truncated: meta.truncated,
+        metadata: {
+          api_calls: meta.api_calls,
+          elapsed_ms: meta.elapsed_ms,
+          rows_scanned: meta.rows_scanned,
+        },
+      },
+    };
+  }),
+});
+
+register({
+  name: "match_database_rows",
+  access: "read",
+  domain: "databases",
+  description:
+    "Find compact row references whose selected or all flattened properties contain a text query, without returning full rows.",
+  batchable: false,
+  schema: MatchDatabaseRowsParams,
+  example: {
+    data_source_id: "<data-source-id>",
+    query: "PO",
+    properties: ["Task"],
+    select: ["Step-Nr", "Phase/Status", "Task"],
+    limit: 25,
+  },
+  handler: tryHandler(async (params: MatchRowsParams): Promise<OperationResult<unknown>> => {
+    const scanned = await scanRows(params, { limit: DEFAULT_LIMIT, max_pages: DEFAULT_MAX_PAGES });
+    if (!scanned.ok) return scanned;
+    const { rows, meta } = scanned.data;
+    const matches = rows.filter((row) => matchesTextQuery(row, params.query, params.properties));
+    return {
+      ok: true,
+      data: {
+        query: params.query,
+        matched_total: matches.length,
+        results: matches.map((row) => rowRef(row, params.select)),
         has_more: meta.has_more,
         next_cursor: meta.next_cursor,
         truncated: meta.truncated,
