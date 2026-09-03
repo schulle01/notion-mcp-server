@@ -44,12 +44,14 @@ vi.mock("../src/services/notion.js", () => ({
 
 import { initOperations } from "../src/operations/index.js";
 import { dispatch } from "../src/dispatch/index.js";
+import { clearSchemaCache } from "../src/services/schema-cache.js";
 
 beforeAll(async () => {
   await initOperations();
 });
 
 beforeEach(() => {
+  clearSchemaCache();
   calls.length = 0;
   const resetAll = (obj: unknown): void => {
     if (typeof obj === "function" && "mockReset" in (obj as object)) {
@@ -311,6 +313,72 @@ const pageRow = (id: string, properties: Record<string, unknown>, url = `https:/
 });
 
 describe("database analysis ops", () => {
+  it("uses the data source schema when compiling typed where filters", async () => {
+    notionStub.dataSources.retrieve.mockResolvedValue({
+      object: "data_source",
+      id: "ds-1",
+      title: [],
+      properties: { Status: { id: "status", type: "status", status: { options: [] } } },
+    });
+    notionStub.dataSources.query.mockResolvedValue({
+      object: "list",
+      results: [],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    const res = await dispatch("query_database_table", {
+      data_source_id: "ds-1",
+      where: { Status: "Done" },
+    });
+
+    expect((res as { ok: boolean }).ok).toBe(true);
+    expect(notionStub.dataSources.query).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filter: { property: "Status", status: { equals: "Done" } },
+      })
+    );
+  });
+
+  it("uses stable file refs in projected properties when configured", async () => {
+    const previous = process.env.NOTION_FILE_URLS;
+    process.env.NOTION_FILE_URLS = "ref";
+    notionStub.dataSources.query.mockResolvedValue({
+      object: "list",
+      results: [
+        pageRow("p-1", {
+          Files: {
+            id: "files",
+            type: "files",
+            files: [
+              {
+                name: "diagram.png",
+                type: "file",
+                file: { url: "https://signed.example/diagram.png", expiry_time: "2026-09-03T12:00:00Z" },
+              },
+            ],
+          },
+        }),
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    try {
+      const res = await dispatch("query_database_table", {
+        data_source_id: "ds-1",
+        select: ["Files"],
+      });
+      const data = res as { data: { results: Array<{ properties: Record<string, unknown> }> } };
+      expect(data.data.results[0].properties.Files).toEqual([
+        { name: "diagram.png", url: "notion-file:page/p-1/Files/0" },
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.NOTION_FILE_URLS;
+      else process.env.NOTION_FILE_URLS = previous;
+    }
+  });
+
   it("query_database_table returns selected-property projections only", async () => {
     notionStub.dataSources.query.mockResolvedValue({
       object: "list",

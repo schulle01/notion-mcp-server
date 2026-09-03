@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getClient } from "../services/notion.js";
 import { WHERE_SCHEMA, compileWhere } from "../schema/filter-dsl.js";
 import { notionId } from "../schema/id.js";
+import { getDataSourceSchema } from "../services/schema-cache.js";
 import { flattenProperty } from "../utils/slim.js";
 import { asSdk, type QueryDataSourceBody } from "../utils/notion-types.js";
 import { tryHandler } from "../utils/handler.js";
@@ -142,8 +143,20 @@ async function resolveDataSourceId(params: Pick<ScanParams, "database_id" | "dat
   return { ok: true as const, data_source_id: sources[0].id };
 }
 
-function compileScanFilter(params: Pick<ScanParams, "where" | "filter">) {
-  if (params.where !== undefined) return compileWhere(params.where);
+async function compileScanFilter(
+  params: Pick<ScanParams, "where" | "filter">,
+  dataSourceId: string
+) {
+  if (params.where !== undefined) {
+    let types: Awaited<ReturnType<typeof getDataSourceSchema>> | undefined;
+    try {
+      const schema = await getDataSourceSchema(dataSourceId);
+      if (Object.keys(schema).length > 0) types = schema;
+    } catch {
+      types = undefined;
+    }
+    return compileWhere(params.where, types);
+  }
   return params.filter;
 }
 
@@ -156,7 +169,7 @@ async function scanRows(
 
   let compiledFilter: unknown;
   try {
-    compiledFilter = compileScanFilter(params);
+    compiledFilter = await compileScanFilter(params, resolved.data_source_id);
   } catch (err) {
     return {
       ok: false,
@@ -228,11 +241,16 @@ function isPageLike(value: unknown): value is PageLike {
   return typeof value === "object" && value !== null && (value as PageLike).object === "page";
 }
 
+function flattenPageProperty(page: PageLike, name: string, property: unknown): unknown {
+  const context = page.id ? { pageId: page.id, property: name } : undefined;
+  return flattenProperty(property as Parameters<typeof flattenProperty>[0], context);
+}
+
 function pageTitle(page: PageLike): string | undefined {
   const properties = page.properties ?? {};
-  for (const prop of Object.values(properties)) {
+  for (const [name, prop] of Object.entries(properties)) {
     if (propertyType(prop) === "title") {
-      const title = flattenProperty(prop as Parameters<typeof flattenProperty>[0]);
+      const title = flattenPageProperty(page, name, prop);
       return typeof title === "string" && title ? title : undefined;
     }
   }
@@ -256,7 +274,7 @@ function projectProperties(page: PageLike, select?: string[]): Record<string, un
   for (const name of propertyNames(page, select)) {
     const prop = properties[name];
     if (prop === undefined) continue;
-    const flat = flattenProperty(prop as Parameters<typeof flattenProperty>[0]);
+    const flat = flattenPageProperty(page, name, prop);
     if (flat !== undefined) out[name] = flat;
   }
   return out;
@@ -284,7 +302,7 @@ function valueLabel(value: unknown): string {
 function groupValue(page: PageLike, name: string): unknown {
   const prop = page.properties?.[name];
   if (prop === undefined) return null;
-  return flattenProperty(prop as Parameters<typeof flattenProperty>[0]) ?? null;
+  return flattenPageProperty(page, name, prop) ?? null;
 }
 
 function compactTitle(value: unknown): string | undefined {
@@ -343,7 +361,7 @@ function searchableValues(page: PageLike, properties?: string[]): unknown[] {
   const names = properties ?? Object.keys(page.properties ?? {});
   return names.map((name) => {
     const prop = page.properties?.[name];
-    return prop === undefined ? undefined : flattenProperty(prop as Parameters<typeof flattenProperty>[0]);
+    return prop === undefined ? undefined : flattenPageProperty(page, name, prop);
   });
 }
 
@@ -507,7 +525,7 @@ register({
       const counts = new Map<string, { value: unknown; count: number; label: string }>();
       for (const row of rows) {
         const prop = row.properties?.[name];
-        const value = prop === undefined ? undefined : flattenProperty(prop as Parameters<typeof flattenProperty>[0]);
+        const value = prop === undefined ? undefined : flattenPageProperty(row, name, prop);
         if (value === undefined || (Array.isArray(value) && value.length === 0)) {
           empty += 1;
           continue;
