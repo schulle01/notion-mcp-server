@@ -13,6 +13,7 @@ export type OperationName =
   | "get_page_markdown"
   | "move_page"
   | "update_page_markdown"
+  | "reorder_child_pages"
   | "append_blocks"
   | "get_block"
   | "get_block_children"

@@ -9,6 +9,7 @@ export async function initOperations(): Promise<void> {
   // Side-effect imports register every operation into the central registry.
   await Promise.all([
     import("./pages.js"),
+    import("./reorder-child-pages.js"),
     import("./blocks.js"),
     import("./databases.js"),
     import("./database-analysis.js"),
