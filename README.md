@@ -312,7 +312,7 @@ Operation access: 22/48 enabled (allow=read; block=(none))
 
 | Domain | Read | Write |
 | --- | --- | --- |
-| `pages` | `search_pages` `get_page` `get_page_markdown` | `create_page` `set_page_title` `set_page_property` `set_page_properties` `update_page_markdown` `move_page` `restore_page` `archive_page`† `trash_page`† |
+| `pages` | `search_pages` `get_page` `get_page_markdown` | `create_page` `set_page_title` `set_page_property` `set_page_properties` `update_page_markdown` `move_page` `reorder_child_pages` `restore_page` `archive_page`† `trash_page`† |
 | `blocks` | `get_block` `get_block_children` | `append_blocks` `update_block` `delete_block`† `batch_mixed_blocks`† |
 | `databases` | `query_database` | `create_database` `update_database` `delete_database`† |
 | `data_sources` | `list_data_sources` `get_data_source` `list_data_source_templates` | `update_data_source` `delete_data_source`† |

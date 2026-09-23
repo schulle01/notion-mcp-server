@@ -57,12 +57,48 @@ function topLevelPageTags(markdown: string): PageTag[] {
   return tags;
 }
 
+function stableNotionFileUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return value;
+  }
+  for (const key of [...url.searchParams.keys()]) {
+    const lower = key.toLowerCase();
+    if (lower.startsWith("x-amz-") || lower === "awsaccesskeyid" || lower === "signature" || lower === "expires") {
+      url.searchParams.delete(key);
+    }
+  }
+  return url.toString();
+}
+
+function stableBlockValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableBlockValue);
+  if (!value || typeof value !== "object") return value;
+  const object = value as Record<string, unknown>;
+  const hostedFile = object.type === "file" && object.file && typeof object.file === "object"
+    ? object.file as Record<string, unknown>
+    : undefined;
+  if (hostedFile && typeof hostedFile.url === "string") {
+    const normalizedFile = Object.fromEntries(
+      Object.entries(hostedFile)
+        .filter(([key]) => key !== "expiry_time")
+        .map(([key, item]) => [key, key === "url" ? stableNotionFileUrl(item as string) : stableBlockValue(item)])
+    );
+    return Object.fromEntries(
+      Object.entries(object).map(([key, item]) => [key, key === "file" ? normalizedFile : stableBlockValue(item)])
+    );
+  }
+  return Object.fromEntries(Object.entries(object).map(([key, item]) => [key, stableBlockValue(item)]));
+}
+
 function blockSnapshot(block: DirectBlock): unknown {
   return {
     id: canonicalId(block.id),
     type: block.type,
-    parent: block.parent ?? null,
-    content: block[block.type] ?? null,
+    parent: stableBlockValue(block.parent ?? null),
+    content: stableBlockValue(block[block.type] ?? null),
   };
 }
 
@@ -227,7 +263,15 @@ register({
       if (error instanceof IncompleteChildrenError) return { ok: false, error: { code: "incomplete_page_state", message: error.message } };
       throw error;
     }
-    if (initial.markdown !== latest.markdown || snapshots(initial.blocks) !== snapshots(latest.blocks)) {
+    const latestPlan = planChildPageReorder(latest.blocks, latest.markdown, ordered_page_ids);
+    if (
+      !latestPlan.ok ||
+      !latestPlan.supported ||
+      !latestPlan.changed ||
+      latestPlan.old_str !== plan.old_str ||
+      latestPlan.new_str !== plan.new_str ||
+      snapshots(initial.blocks) !== snapshots(latest.blocks)
+    ) {
       return { ok: false, error: { code: "concurrent_page_change", message: "The parent page or its direct children changed after planning; no write was attempted. Retry from the current state." } };
     }
 

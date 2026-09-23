@@ -32,6 +32,31 @@ const tag = (id: string, title: string) => `<page url="https://app.notion.com/p/
 const MARKDOWN = `Before\n\n${tag(A, "A")}\n${tag(B, "B")}\n${tag(C, "C")}\n\nAfter`;
 const BLOCKS = [paragraph(), child(A, "A"), child(B, "B"), child(C, "C"), paragraph("88888888-8888-8888-8888-888888888888", "after")];
 
+function hostedImage(path: string, signature: string, expiry: string, version = "stable") {
+  return {
+    id: "77777777-7777-7777-7777-777777777777",
+    type: "image",
+    parent: { type: "page_id", page_id: PARENT },
+    image: {
+      type: "file",
+      file: {
+        url: `https://prod-files-secure.s3.us-west-2.amazonaws.com/${path}?versionId=${version}&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=${signature}&X-Amz-Expires=3600`,
+        expiry_time: expiry,
+      },
+      caption: [],
+    },
+  };
+}
+
+function externalImage(url: string) {
+  return {
+    id: "77777777-7777-7777-7777-777777777777",
+    type: "image",
+    parent: { type: "page_id", page_id: PARENT },
+    image: { type: "external", external: { url }, caption: [] },
+  };
+}
+
 function markdownResponse(markdown = MARKDOWN) {
   return { markdown, truncated: false, unknown_block_ids: [] };
 }
@@ -127,6 +152,52 @@ describe("reorder_child_pages handler", () => {
     notionStub.blocks.children.list
       .mockResolvedValueOnce(listPage())
       .mockResolvedValueOnce(listPage([paragraph(undefined, "changed"), ...BLOCKS.slice(1)]));
+    notionStub.pages.retrieveMarkdown.mockResolvedValue(markdownResponse());
+    const result = await dispatch("reorder_child_pages", { page_id: PARENT, ordered_page_ids: [C, B, A], dry_run: false });
+    expect(result).toMatchObject({ ok: false, error: { code: "concurrent_page_change" } });
+    expect(notionStub.pages.updateMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("accepts refreshed Notion file signatures before and after the write", async () => {
+    const initial = [hostedImage("space/file.png", "old", "2026-09-23T10:00:00Z"), ...BLOCKS.slice(1)];
+    const latest = [hostedImage("space/file.png", "new", "2026-09-23T11:00:00Z"), ...BLOCKS.slice(1)];
+    const after = [hostedImage("space/file.png", "newer", "2026-09-23T12:00:00Z"), child(C, "C"), child(B, "B"), child(A, "A"), BLOCKS[4]];
+    notionStub.blocks.children.list
+      .mockResolvedValueOnce(listPage(initial))
+      .mockResolvedValueOnce(listPage(latest))
+      .mockResolvedValueOnce(listPage(after));
+    notionStub.pages.retrieveMarkdown
+      .mockResolvedValueOnce(markdownResponse(`![file](https://signed/old)\n${MARKDOWN}`))
+      .mockResolvedValueOnce(markdownResponse(`![file](https://signed/new)\n${MARKDOWN}`));
+    notionStub.pages.updateMarkdown.mockResolvedValue({ id: PARENT });
+    const result = await dispatch("reorder_child_pages", { page_id: PARENT, ordered_page_ids: [C, B, A], dry_run: false });
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it("detects an actual Notion-hosted file change", async () => {
+    const initial = [hostedImage("space/file.png", "old", "2026-09-23T10:00:00Z"), ...BLOCKS.slice(1)];
+    const changed = [hostedImage("space/other.png", "new", "2026-09-23T11:00:00Z"), ...BLOCKS.slice(1)];
+    notionStub.blocks.children.list.mockResolvedValueOnce(listPage(initial)).mockResolvedValueOnce(listPage(changed));
+    notionStub.pages.retrieveMarkdown.mockResolvedValue(markdownResponse());
+    const result = await dispatch("reorder_child_pages", { page_id: PARENT, ordered_page_ids: [C, B, A], dry_run: false });
+    expect(result).toMatchObject({ ok: false, error: { code: "concurrent_page_change" } });
+    expect(notionStub.pages.updateMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-signature hosted-file query parameters identity-relevant", async () => {
+    const initial = [hostedImage("space/file.png", "old", "2026-09-23T10:00:00Z", "v1"), ...BLOCKS.slice(1)];
+    const changed = [hostedImage("space/file.png", "new", "2026-09-23T11:00:00Z", "v2"), ...BLOCKS.slice(1)];
+    notionStub.blocks.children.list.mockResolvedValueOnce(listPage(initial)).mockResolvedValueOnce(listPage(changed));
+    notionStub.pages.retrieveMarkdown.mockResolvedValue(markdownResponse());
+    const result = await dispatch("reorder_child_pages", { page_id: PARENT, ordered_page_ids: [C, B, A], dry_run: false });
+    expect(result).toMatchObject({ ok: false, error: { code: "concurrent_page_change" } });
+    expect(notionStub.pages.updateMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("detects a changed external file URL", async () => {
+    const initial = [externalImage("https://example.com/file.png"), ...BLOCKS.slice(1)];
+    const changed = [externalImage("https://example.com/other.png"), ...BLOCKS.slice(1)];
+    notionStub.blocks.children.list.mockResolvedValueOnce(listPage(initial)).mockResolvedValueOnce(listPage(changed));
     notionStub.pages.retrieveMarkdown.mockResolvedValue(markdownResponse());
     const result = await dispatch("reorder_child_pages", { page_id: PARENT, ordered_page_ids: [C, B, A], dry_run: false });
     expect(result).toMatchObject({ ok: false, error: { code: "concurrent_page_change" } });
