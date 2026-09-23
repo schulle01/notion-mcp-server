@@ -570,10 +570,10 @@ Read operations (`get_*`, `list_*`, `search_pages`, `query_database`, `query_vie
 | **Users** | `list_users`, `get_user`, `get_bot_user`, `get_self` |
 | **Files** | `upload_file`, `list_file_uploads`, `get_file_upload`, `get_file_url`, `get_image` |
 
-`reorder_child_pages` accepts a complete ordered permutation of every direct child-page ID under one parent and defaults to `dry_run: true`:
+`reorder_child_pages` accepts a complete ordered permutation of every direct child-page ID under one parent and defaults to `dry_run: true`. Set `dry_run: false` explicitly to execute the reorder:
 
 ```json
-{ "operation": "reorder_child_pages", "page_id": "<parent-page-id>", "ordered_page_ids": ["<child-b>", "<child-a>"], "dry_run": true }
+{ "operation": "reorder_child_pages", "payload": { "page_id": "<parent-page-id>", "ordered_page_ids": ["<child-b>", "<child-a>"], "dry_run": false } }
 ```
 
 It only writes when those child pages form one contiguous region represented by exact top-level Enhanced Markdown `<page>` tags. Intervening blocks, incomplete Markdown, unsupported representations, or a best-effort pre-write concurrency check that detects changed content are rejected without a write. After a write, the complete direct-block sequence is checked against the planned permutation; an unexpected result is reported without automatic repair. Preservation of existing child-page identities by Notion's Markdown API still requires a real synthetic verification after deployment.
