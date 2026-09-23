@@ -64,9 +64,21 @@ function stableNotionFileUrl(value: string): string {
   } catch {
     return value;
   }
+  const volatileSignatureParameters = new Set([
+    "x-amz-algorithm",
+    "x-amz-credential",
+    "x-amz-date",
+    "x-amz-expires",
+    "x-amz-signedheaders",
+    "x-amz-signature",
+    "x-amz-security-token",
+    "awsaccesskeyid",
+    "signature",
+    "expires",
+  ]);
   for (const key of [...url.searchParams.keys()]) {
     const lower = key.toLowerCase();
-    if (lower.startsWith("x-amz-") || lower === "awsaccesskeyid" || lower === "signature" || lower === "expires") {
+    if (volatileSignatureParameters.has(lower)) {
       url.searchParams.delete(key);
     }
   }

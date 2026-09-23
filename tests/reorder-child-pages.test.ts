@@ -32,7 +32,7 @@ const tag = (id: string, title: string) => `<page url="https://app.notion.com/p/
 const MARKDOWN = `Before\n\n${tag(A, "A")}\n${tag(B, "B")}\n${tag(C, "C")}\n\nAfter`;
 const BLOCKS = [paragraph(), child(A, "A"), child(B, "B"), child(C, "C"), paragraph("88888888-8888-8888-8888-888888888888", "after")];
 
-function hostedImage(path: string, signature: string, expiry: string, version = "stable") {
+function hostedImage(path: string, signature: string, expiry: string, version = "stable", checksumMode = "ENABLED") {
   return {
     id: "77777777-7777-7777-7777-777777777777",
     type: "image",
@@ -40,7 +40,7 @@ function hostedImage(path: string, signature: string, expiry: string, version = 
     image: {
       type: "file",
       file: {
-        url: `https://prod-files-secure.s3.us-west-2.amazonaws.com/${path}?versionId=${version}&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=${signature}&X-Amz-Expires=3600`,
+        url: `https://prod-files-secure.s3.us-west-2.amazonaws.com/${path}?versionId=${version}&X-Amz-Checksum-Mode=${checksumMode}&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=${signature}&X-Amz-Expires=3600`,
         expiry_time: expiry,
       },
       caption: [],
@@ -187,6 +187,16 @@ describe("reorder_child_pages handler", () => {
   it("keeps non-signature hosted-file query parameters identity-relevant", async () => {
     const initial = [hostedImage("space/file.png", "old", "2026-09-23T10:00:00Z", "v1"), ...BLOCKS.slice(1)];
     const changed = [hostedImage("space/file.png", "new", "2026-09-23T11:00:00Z", "v2"), ...BLOCKS.slice(1)];
+    notionStub.blocks.children.list.mockResolvedValueOnce(listPage(initial)).mockResolvedValueOnce(listPage(changed));
+    notionStub.pages.retrieveMarkdown.mockResolvedValue(markdownResponse());
+    const result = await dispatch("reorder_child_pages", { page_id: PARENT, ordered_page_ids: [C, B, A], dry_run: false });
+    expect(result).toMatchObject({ ok: false, error: { code: "concurrent_page_change" } });
+    expect(notionStub.pages.updateMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-authentication X-Amz parameters identity-relevant", async () => {
+    const initial = [hostedImage("space/file.png", "old", "2026-09-23T10:00:00Z", "stable", "ENABLED"), ...BLOCKS.slice(1)];
+    const changed = [hostedImage("space/file.png", "new", "2026-09-23T11:00:00Z", "stable", "DISABLED"), ...BLOCKS.slice(1)];
     notionStub.blocks.children.list.mockResolvedValueOnce(listPage(initial)).mockResolvedValueOnce(listPage(changed));
     notionStub.pages.retrieveMarkdown.mockResolvedValue(markdownResponse());
     const result = await dispatch("reorder_child_pages", { page_id: PARENT, ordered_page_ids: [C, B, A], dry_run: false });
