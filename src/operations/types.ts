@@ -18,6 +18,7 @@ export type OperationName =
   | "get_block"
   | "get_block_children"
   | "update_block"
+  | "restore_block"
   | "delete_block"
   | "batch_mixed_blocks"
   | "create_database"
