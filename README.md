@@ -305,7 +305,7 @@ On startup the server logs one line to stderr summarizing what resolved — chec
 Operation access: 22/48 enabled (allow=read; block=(none))
 ```
 
-**Confirm instead of block.** `NOTION_CONFIRM_DESTRUCTIVE=true` keeps destructive operations enabled but makes `notion_write` ask *you* before running one, through [MCP elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation) — an `elicitation/create` request on 2025-era clients, an `input_required` round trip on MCP 2026-07-28 clients, where the retry carries a sealed `requestState` that only matches the call it was minted for: a yes/no dialog in your client that names the operation and its target — the page, database, data source or block title when one retrieve can fetch it (bounded to 5 s), otherwise the id; for a batch, how many items. Restores (`restore_page`, `delete_database` / `delete_data_source` with `in_trash: false`) and a `batch_mixed_blocks` call with no `delete` entry do not prompt, and a blocked operation is still rejected with `operation_not_allowed` before anyone is asked. Decline, cancel or answer no and the call returns `confirmation_declined`; the server instructions tell the model not to retry it and to ask you instead. A client that has not declared the elicitation capability gets `confirmation_unavailable` rather than a silent run — use a client that supports elicitation, unset the variable, or block destructive operations outright with `NOTION_BLOCKED_OPERATIONS=destructive`.
+**Confirm instead of block.** `NOTION_CONFIRM_DESTRUCTIVE=true` keeps destructive operations enabled but makes `notion_write` ask *you* before running one, through [MCP elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation) — an `elicitation/create` request on 2025-era clients, an `input_required` round trip on MCP 2026-07-28 clients, where the retry carries a sealed `requestState` that only matches the call it was minted for: a yes/no dialog in your client that names the operation and its target — the page, database, data source or block title when one retrieve can fetch it (bounded to 5 s), otherwise the id; for a batch, how many items. Restores (`restore_page`, `restore_block`, `delete_database` / `delete_data_source` with `in_trash: false`) and a `batch_mixed_blocks` call with no `delete` entry do not prompt, and a blocked operation is still rejected with `operation_not_allowed` before anyone is asked. Decline, cancel or answer no and the call returns `confirmation_declined`; the server instructions tell the model not to retry it and to ask you instead. A client that has not declared the elicitation capability gets `confirmation_unavailable` rather than a silent run — use a client that supports elicitation, unset the variable, or block destructive operations outright with `NOTION_BLOCKED_OPERATIONS=destructive`.
 
 <details>
 <summary><b>Per-operation reference & limitations</b></summary>
@@ -313,7 +313,7 @@ Operation access: 22/48 enabled (allow=read; block=(none))
 | Domain | Read | Write |
 | --- | --- | --- |
 | `pages` | `search_pages` `get_page` `get_page_markdown` | `create_page` `set_page_title` `set_page_property` `set_page_properties` `update_page_markdown` `move_page` `reorder_child_pages` `restore_page` `archive_page`† `trash_page`† |
-| `blocks` | `get_block` `get_block_children` | `append_blocks` `update_block` `delete_block`† `batch_mixed_blocks`† |
+| `blocks` | `get_block` `get_block_children` | `append_blocks` `update_block` `restore_block` `delete_block`† `batch_mixed_blocks`† |
 | `databases` | `query_database` | `create_database` `update_database` `delete_database`† |
 | `data_sources` | `list_data_sources` `get_data_source` `list_data_source_templates` | `update_data_source` `delete_data_source`† |
 | `views` | `list_views` `get_view` `query_view` | `create_view` `update_view` `delete_view`† |
@@ -562,7 +562,7 @@ Read operations (`get_*`, `list_*`, `search_pages`, `query_database`, `query_vie
 | Area | Operations |
 | --- | --- |
 | **Pages** | `create_page`, `get_page`, `set_page_title`, `set_page_property`, `set_page_properties`, `archive_page` (alias: `trash_page`), `restore_page`, `search_pages`, `move_page`, `reorder_child_pages`, `get_page_markdown`, `update_page_markdown` |
-| **Blocks** | `append_blocks`, `get_block`, `get_block_children`, `update_block`, `delete_block`, `batch_mixed_blocks` |
+| **Blocks** | `append_blocks`, `get_block`, `get_block_children`, `update_block`, `restore_block`, `delete_block`, `batch_mixed_blocks` |
 | **Databases** | `create_database`, `query_database`, `inspect_database_compact`, `query_database_table`, `aggregate_database_table`, `summarize_database_table`, `list_database_row_refs`, `match_database_rows`, `update_database`, `delete_database` |
 | **Data sources** | `list_data_sources`, `get_data_source`, `update_data_source`, `rename_data_source_property`, `delete_data_source`, `list_data_source_templates` |
 | **Views** | `list_views`, `get_view`, `configure_view_properties`, `query_view`, `create_view`, `update_view`, `delete_view` |
@@ -579,6 +579,14 @@ Read operations (`get_*`, `list_*`, `search_pages`, `query_database`, `query_vie
 It only writes when those child pages form one contiguous region represented by exact top-level Enhanced Markdown `<page>` tags. Intervening blocks, incomplete Markdown, unsupported representations, or a best-effort pre-write concurrency check that detects changed content are rejected without a write. After a write, the complete direct-block sequence is checked against the planned permutation; an unexpected result is reported without automatic repair. Preservation of existing child-page identities by Notion's Markdown API still requires a real synthetic verification after deployment.
 
 The authoritative list (with batchability) is served as an MCP resource at `notion://operations`.
+
+`restore_block` restores an existing trashed block by its known ID:
+
+```json
+{ "operation": "restore_block", "payload": { "block_id": "<block-id>" } }
+```
+
+The operation sends no block type or content. Notion chooses the restored position; callers cannot select a different position, and the operation does not discover damaged content or automate repairs.
 
 ### MCP resources
 

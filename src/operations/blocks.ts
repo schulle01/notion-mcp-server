@@ -259,8 +259,36 @@ register({
 });
 
 // ──────────────────────────────────────────────────────────────────────────
-// delete_block
+// restore_block
 // ──────────────────────────────────────────────────────────────────────────
+
+const RestoreBlockParams = z.object({
+  block_id: notionId("block").describe("ID of an existing block that is in trash."),
+  verbose: VERBOSE,
+});
+
+register({
+  name: "restore_block",
+  access: "write",
+  domain: "blocks",
+  description:
+    "Restore an existing block by ID after it was moved to trash. Notion chooses its restored position; this does not recreate content or automate repairs.",
+  batchable: true,
+  schema: RestoreBlockParams,
+  example: { block_id: "<block-id>" },
+  exampleBatch: { items: [{ block_id: "<block-id-1>" }, { block_id: "<block-id-2>" }] },
+  handler: tryHandler(async ({ block_id, verbose }) => {
+    const notion = await getClient();
+    const response = await notion.blocks.update(
+      asSdk<UpdateBlockBody>({ block_id, in_trash: false })
+    );
+    return { ok: true, data: slimBlock(response, verbose ?? false) };
+  }),
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// delete_block
+// ───────────────────────────────────────────────────────────────────────
 
 const DeleteBlockParams = z.object({ block_id: notionId("block"), verbose: VERBOSE });
 

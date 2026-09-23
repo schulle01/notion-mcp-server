@@ -6,11 +6,12 @@ beforeAll(async () => {
 });
 
 describe("operations registry", () => {
-  it("registers every name in the OperationName union (57 total: 48 upstream + 9 custom ops)", () => {
+  it("registers every name in the OperationName union (58 total: 48 upstream + 10 custom ops)", () => {
     const names = operationNames();
-    expect(names.length).toBe(57);
+    expect(names.length).toBe(58);
     expect(names).toContain("trash_page");
     expect(names).toContain("get_self");
+    expect(names).toContain("restore_block");
   });
 
   it("includes the view ops", () => {
