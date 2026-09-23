@@ -6,9 +6,9 @@ beforeAll(async () => {
 });
 
 describe("operations registry", () => {
-  it("registers every name in the OperationName union (56 total: 48 upstream + 8 custom ops)", () => {
+  it("registers every name in the OperationName union (57 total: 48 upstream + 9 custom ops)", () => {
     const names = operationNames();
-    expect(names.length).toBe(56);
+    expect(names.length).toBe(57);
     expect(names).toContain("trash_page");
     expect(names).toContain("get_self");
   });
@@ -53,6 +53,7 @@ describe("operations registry", () => {
   it("includes the page markdown ops", () => {
     expect(getOperation("get_page_markdown")).toBeDefined();
     expect(getOperation("update_page_markdown")).toBeDefined();
+    expect(getOperation("reorder_child_pages")).toBeDefined();
   });
 
   it("includes the v2 gap-closure ops added on top of v1 capabilities", () => {
