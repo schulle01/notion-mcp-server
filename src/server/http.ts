@@ -9,6 +9,7 @@ import {
   SUPPORTED_PROTOCOL_VERSIONS,
 } from "@modelcontextprotocol/server";
 import { isLoopbackHost, setActiveTransport, unauthenticatedBindError, type HttpConfig } from "../config/http.js";
+import { maxToolInputElements } from "../config/input-limits.js";
 import { CONFIG } from "../config/index.js";
 import { createServer, logAccessSummary, verifyNotionAuth } from "./index.js";
 import { checkAuth } from "./auth.js";
@@ -56,8 +57,6 @@ const LEGACY_SESSION_LIMITS: LegacySessionLimits = {
   max: 1_000,
 };
 
-const MAX_BODY_BYTES = 4 * 1024 * 1024; // 4 MB
-
 const MODERN_PROTOCOL_VERSION = "2026-07-28";
 /** The 2025-era revisions the legacy stack negotiates. */
 const LEGACY_PROTOCOL_VERSIONS: readonly string[] = SUPPORTED_PROTOCOL_VERSIONS;
@@ -68,20 +67,31 @@ class BodyError extends Error {
   }
 }
 
-function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
+function readJsonBody(req: http.IncomingMessage, maxBytes: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let exceeded = false;
     const chunks: Buffer[] = [];
+    const refuse = () => {
+      exceeded = true;
+      chunks.length = 0;
+      reject(new BodyError(413, "Request body too large"));
+      // Keep the socket alive long enough to drain and deliver the 413.
+      req.resume();
+    };
+    const declared = req.headers["content-length"];
+    if (declared !== undefined && Number(declared) > maxBytes) {
+      refuse();
+      return;
+    }
     req.on("data", (chunk: Buffer) => {
+      if (exceeded) return;
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        reject(new BodyError(413, "Request body too large"));
-        req.destroy();
-        return;
-      }
+      if (size > maxBytes) return refuse();
       chunks.push(chunk);
     });
     req.on("end", () => {
+      if (exceeded) return;
       const raw = Buffer.concat(chunks).toString("utf8");
       if (raw.trim() === "") return resolve(undefined);
       try {
@@ -112,10 +122,11 @@ async function sendJsonRpcError(
   code: number,
   message: string
 ): Promise<void> {
-  // Fully drain the request body before responding. Ending the response while the
-  // client is still streaming the body resets the socket (ECONNRESET) and the client
-  // never sees our status — so we wait for the upload to finish first.
-  await drain(req);
+  // Oversized uploads must receive 413 even if the caller never ends its body.
+  // Discard further bytes without buffering; Connection: close below lets Node
+  // finish the response before closing the socket. Do not destroy it here.
+  if (status === 413) req.resume();
+  else await drain(req);
   if (res.headersSent || res.writableEnded || res.destroyed) return;
   const payload = JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null });
   // Connection: close — we rejected this request without reusing the socket; some
@@ -222,6 +233,7 @@ export async function startHttp(
   config: HttpConfig,
   limits: LegacySessionLimits = LEGACY_SESSION_LIMITS
 ): Promise<HttpHandle> {
+  maxToolInputElements(); // Validate before binding; createServer applies the limit.
   const bindError = unauthenticatedBindError(config);
   if (bindError) throw new Error(bindError);
   setActiveTransport("http");
@@ -279,9 +291,11 @@ export async function startHttp(
   // not a server fault: a warning line, no stack trace.
   const modern = createMcpHandler(createServer, {
     legacy: "reject",
+    maxRequestBodySize: config.maxRequestBodySize,
     onerror: (error) => log.warning(`MCP handler: ${error.message}`),
   });
   const serveModern = toNodeHandler(modern, {
+    maxRequestBodySize: config.maxRequestBodySize,
     onerror: (error) => log.warning(`MCP adapter: ${error.message}`),
   });
 
@@ -354,7 +368,7 @@ export async function startHttp(
     if (req.method === "POST") {
       let body: unknown;
       try {
-        body = await readJsonBody(req);
+        body = await readJsonBody(req, config.maxRequestBodySize);
       } catch (e) {
         const status = e instanceof BodyError ? e.status : 400;
         await sendJsonRpcError(req, res, status, -32700, e instanceof Error ? e.message : "Parse error");
@@ -417,6 +431,7 @@ export async function startHttp(
           return;
         }
         transport = new NodeStreamableHTTPServerTransport({
+          maxRequestBodySize: config.maxRequestBodySize,
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id) => {
             transports[id] = transport!;

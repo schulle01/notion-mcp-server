@@ -23,6 +23,12 @@ curl http://127.0.0.1:3000/health
 npx @modelcontextprotocol/inspector --transport http --server-url http://127.0.0.1:3000/mcp
 ```
 
+## Request size limit
+
+Native `/mcp` requests now default to **1 MiB**, reduced intentionally from the upstream 4 MiB default. `MCP_MAX_REQUEST_BODY_SIZE` changes this positive integer byte limit. It applies before JSON parsing to requests with Content-Length and to streamed bodies, and is passed to both SDK protocol transports and the Node adapter. A body above it receives HTTP 413. `MCP_MAX_TOOL_INPUT_ELEMENTS` separately limits nested argument elements to 100000 by default; strings still need the byte limit.
+
+Large base64 uploads may exceed 1 MiB because encoding adds overhead. Prefer `upload_file` with a public URL or attach an external file URL as a block, split the work, or explicitly raise the native limit to the smallest required size. An external HTTP-to-stdio bridge has its own HTTP body limit; these native settings do not replace that bridge's parser limit. Configure the stdio child with `NOTION_REMOTE_CLIENTS=true` so remote callers cannot use local path uploads without an explicit `NOTION_UPLOAD_ROOT`.
+
 ## Docker
 
 Inside a container `127.0.0.1` is the container's own loopback, so `HOST=0.0.0.0` is what makes the published port reachable. A non-loopback bind is exactly where `MCP_AUTH_TOKEN` is needed, and without it the server refuses to start (`MCP_ALLOW_UNAUTHENTICATED=true` overrides that when a proxy in front does the authentication):

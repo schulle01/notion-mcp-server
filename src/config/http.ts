@@ -1,3 +1,5 @@
+import { positiveIntegerSetting } from "./input-limits.js";
+
 export type TransportKind = "stdio" | "http";
 
 // The transport this process is serving. startHttp sets it; stdio is the
@@ -17,6 +19,7 @@ export function getActiveTransport(): TransportKind {
 export type HttpConfig = {
   transport: TransportKind;
   port: number;
+  maxRequestBodySize: number;
   host: string;
   authToken?: string;
   /** MCP_ALLOW_UNAUTHENTICATED: serve a non-loopback HOST without MCP_AUTH_TOKEN. */
@@ -63,7 +66,8 @@ export function parseHttpConfig(env: NodeJS.ProcessEnv): HttpConfig {
   const allowedHosts = parseList(env.MCP_ALLOWED_HOSTS);
   const allowedOrigins = parseList(env.MCP_ALLOWED_ORIGINS);
 
-  return { transport, port, host, authToken, allowUnauthenticated, allowedHosts, allowedOrigins };
+  const maxRequestBodySize = positiveIntegerSetting(env, "MCP_MAX_REQUEST_BODY_SIZE", 1024 * 1024);
+  return { transport, port, host, authToken, allowUnauthenticated, allowedHosts, allowedOrigins, maxRequestBodySize };
 }
 
 /** Bind addresses only this machine can reach: 127.0.0.0/8, ::1 and `localhost`. */

@@ -1035,6 +1035,25 @@ describe("upload_file (path policy)", () => {
     expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
   });
 
+  it("over a remote-client stdio bridge, refuses local paths without a root", async () => {
+    setActiveTransport("stdio");
+    setEnv({ NOTION_REMOTE_CLIENTS: "true" });
+    const res = await uploadPath(join(dir, "plain.txt"));
+    assertErr(res);
+    expect(res.error.code).toBe("path_not_allowed");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("over a remote-client stdio bridge, retains confined-root uploads", async () => {
+    setActiveTransport("stdio");
+    setEnv({ NOTION_REMOTE_CLIENTS: "true", NOTION_UPLOAD_ROOT: dir });
+    assertOk(await uploadPath("plain.txt"));
+    expect((await sendBytes(0)).toString()).toBe("plain");
+    const outside = await uploadPath(join(dir, "..", "outside.txt"));
+    assertErr(outside);
+    expect(outside.error.code).toBe("path_not_allowed");
+  });
+
   it("over HTTP, reads a path inside NOTION_UPLOAD_ROOT", async () => {
     setActiveTransport("http");
     setEnv({ NOTION_UPLOAD_ROOT: dir });

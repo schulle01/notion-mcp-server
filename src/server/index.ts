@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { maxToolInputElements } from "../config/input-limits.js";
 import { CONFIG } from "../config/index.js";
 import { getClient } from "../services/notion.js";
 import { LIST_CACHE, registerAllTools } from "../tools/index.js";
@@ -57,6 +58,7 @@ export function createServer(): McpServer {
       websiteUrl: CONFIG.serverUrl,
     },
     {
+      maxToolInputElements: maxToolInputElements(),
       capabilities: {
         tools: {},
         prompts: {},
@@ -118,6 +120,7 @@ export function verifyNotionAuth(): void {
 
 export async function startStdio(): Promise<void> {
   try {
+    maxToolInputElements(); // Fail invalid explicit settings before listening.
     // One server per connection in both eras: a 2025-era client pins the
     // instance with its `initialize`, a 2026-07-28 one (Claude Code with
     // MCP_PROTOCOL_NEGOTIATION=auto) with its first request. The factory also

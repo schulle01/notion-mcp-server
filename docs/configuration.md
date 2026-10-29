@@ -64,6 +64,12 @@ What the model sees:
 | You decline, cancel or answer no | `confirmation_declined`. The server instructions tell the model not to retry and to ask you instead. |
 | The client hasn't declared the elicitation capability | `confirmation_unavailable`, rather than a silent run. Use a client that supports elicitation, unset the variable, or block destructive operations outright. |
 
+## Input limits
+
+`MCP_MAX_TOOL_INPUT_ELEMENTS` defaults to `100000`. The shared MCP server factory enables the SDK limit for stdio and native HTTP in both protocol generations. It counts array entries and object keys throughout tool arguments before schema validation, including nested payloads. It does not bound string length. Calls above the limit return an MCP tool error before operation dispatch.
+
+`MCP_MAX_REQUEST_BODY_SIZE` defaults to `1048576` bytes (1 MiB) for native HTTP. Both settings accept only positive safe integers; an explicitly invalid setting fails instead of disabling the limit. The byte limit is applied before buffering the complete body or parsing JSON, including chunked requests, and oversized requests receive HTTP 413. See [HTTP transport](./http-transport.md#request-size-limit).
+
 ## Files
 
 ### Uploads
@@ -72,6 +78,7 @@ What the model sees:
 
 | Env var | Default | Effect |
 | --- | --- | --- |
+| `NOTION_REMOTE_CLIENTS` | — | Set `true` for a remote-client bridge whose child uses stdio; path sources then require `NOTION_UPLOAD_ROOT`, as over native HTTP. |
 | `NOTION_UPLOAD_ROOT` | — | Directory a `path` source is confined to. `/` turns confinement off. |
 | `NOTION_UPLOAD_MAX_BYTES` | `1073741824` (1 GiB) | Largest file accepted from any source. |
 | `NOTION_UPLOAD_URL_TIMEOUT_MS` | `30000` | Time limit for a `url` source: DNS, every redirect and the body. |
@@ -79,7 +86,7 @@ What the model sees:
 
 **Paths.** With `NOTION_UPLOAD_ROOT` set, relative paths resolve inside the root and anything landing outside is refused with `path_not_allowed`. Symlinks are resolved before the check, so a link inside the root can't point out of it. Inside the root nothing is filtered: dotfiles such as `.env` and `.git` upload like any other file. Over HTTP that makes the root everything a caller can read, so pick a directory that holds only files you would hand them. Without a root:
 
-- Over the HTTP transport, path sources are refused. The caller may not be on the server's machine, and could otherwise read any file the server can.
+- Over the HTTP transport, or stdio with `NOTION_REMOTE_CLIENTS=true`, path sources are refused. The caller may not be on the server's machine, and could otherwise read any file the server can.
 - Over stdio, a path whose real location goes through a dot-named file or directory (`~/.ssh`, `~/.aws`, `.env`, `.git`) is refused, and so is one under a system or app-data folder:
   - `/proc`, `/sys` and `/dev` (`/proc/self/environ` holds the server's own environment, `NOTION_TOKEN` included), `/run/secrets` and `/var/run/secrets`;
   - on macOS, `~/Library`, where Claude Desktop, Cursor, Windsurf and VS Code keep their MCP config, except iCloud Drive (`~/Library/Mobile Documents`) and `~/Library/CloudStorage`;

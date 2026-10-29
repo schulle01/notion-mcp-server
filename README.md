@@ -187,6 +187,8 @@ MCP_TRANSPORT=http PORT=3000 NOTION_TOKEN=ntn_xxx npx -y notion-mcp-server
 | `HOST` | `127.0.0.1` | bind address; `0.0.0.0` exposes it externally (**only with `MCP_AUTH_TOKEN`**) |
 | `MCP_AUTH_TOKEN` | — | when set, every `/mcp` request must send `Authorization: Bearer <token>` |
 | `MCP_ALLOW_UNAUTHENTICATED` | off | `true` lets a non-loopback `HOST` start without `MCP_AUTH_TOKEN`, for when an authenticating proxy sits in front |
+| `MCP_MAX_REQUEST_BODY_SIZE` | `1048576` | native HTTP request bytes; 1 MiB, intentionally reduced from upstream 4 MiB |
+| `MCP_MAX_TOOL_INPUT_ELEMENTS` | `100000` | nested argument array entries and object keys, on HTTP and stdio |
 | `MCP_ALLOWED_HOSTS` | localhost + bound host | comma-list for the DNS-rebinding `Host` allowlist |
 | `MCP_ALLOWED_ORIGINS` | localhost origins | comma-list for the browser `Origin` allowlist |
 
@@ -198,6 +200,8 @@ Over HTTP, `upload_file` takes no local paths unless `NOTION_UPLOAD_ROOT` is set
 claude mcp add --transport http notion https://your-host/mcp \
   --header "Authorization: Bearer <MCP_AUTH_TOKEN>"
 ```
+
+Both limits require positive safe integers. Large base64 calls may need URL/external uploads or an explicitly raised native byte limit. Bridges have their own HTTP parser limits; stdio bridge children serving remote callers must set `NOTION_REMOTE_CLIENTS=true` to retain the local-upload restriction. Details: [input limits](./docs/configuration.md#input-limits).
 
 Docker, health checks and protocol versions: [docs/http-transport.md](./docs/http-transport.md).
 

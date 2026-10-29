@@ -182,7 +182,7 @@ async function sensitiveZone(target: string): Promise<string | undefined> {
  *
  * - NOTION_UPLOAD_ROOT set: the path must resolve inside it, and a relative
  *   path resolves against it. NOTION_UPLOAD_ROOT=/ turns confinement off.
- * - Unset, HTTP transport: refused. The caller is remote.
+ * - Unset, HTTP transport or NOTION_REMOTE_CLIENTS bridge: refused. The caller is remote.
  * - Unset, stdio: allowed, except a path with a dot-named segment or under a
  *   system or app-data directory (/proc, /dev, ~/Library, %APPDATA%),
  *   checked on the real path so a symlink cannot hide one. A heuristic that
@@ -202,11 +202,13 @@ async function resolveUploadPath(p: string): Promise<string> {
 async function checkUploadPath(p: string): Promise<string> {
   const root = process.env.NOTION_UPLOAD_ROOT?.trim();
   if (!root) {
-    if (getActiveTransport() === "http") {
+    if (getActiveTransport() === "http" || ["true", "1", "yes", "on"].includes(
+      (process.env.NOTION_REMOTE_CLIENTS ?? "").trim().toLowerCase()
+    )) {
       throw new UploadRefused({
         code: "path_not_allowed",
         message:
-          "Path sources are off over the HTTP transport unless NOTION_UPLOAD_ROOT is set: the caller is remote, and could otherwise read any file the server can.",
+          "Path sources are off over the HTTP transport or a remote-client bridge unless NOTION_UPLOAD_ROOT is set: the caller is remote, and could otherwise read any file the server can.",
         fix: "Send the bytes as a base64 source, or ask the server's operator to set NOTION_UPLOAD_ROOT to the directory uploads may come from.",
       });
     }
