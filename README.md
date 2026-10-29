@@ -1,78 +1,52 @@
-# Notion MCP Server — Connect Claude, Cursor & VS Code to Notion
+# Notion MCP Server — Connect Claude, Cursor, VS Code & Codex to Notion
 
 [![npm version](https://img.shields.io/npm/v/notion-mcp-server)](https://www.npmjs.com/package/notion-mcp-server)
-![NPM Downloads](https://img.shields.io/npm/dw/notion-mcp-server)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Model Context Protocol](https://img.shields.io/badge/MCP-Streamable_HTTP_+_stdio-purple)
-![Stars](https://img.shields.io/github/stars/awkoy/notion-mcp-server)
+[![npm downloads](https://img.shields.io/npm/dw/notion-mcp-server)](https://www.npmjs.com/package/notion-mcp-server)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
-Give your AI full read/write access to Notion with **one token and one paste**. This is an agent-first **Notion MCP server**: your AI client (Claude Code, Claude Desktop, Cursor, VS Code, Cline, Zed — anything that speaks MCP) can create pages, query databases, append blocks, apply templates, comment, and upload files in natural language.
+**notion-mcp-server** is a Model Context Protocol (MCP) server that gives Claude Code, Claude Desktop, Cursor, VS Code, Codex and any other MCP client read/write access to Notion with one token. Your AI can search, create and edit pages, query databases, comment and upload files, in plain language.
 
-Three reasons it exists when Notion ships its own MCP:
+- **Token auth on every Notion plan, Free included.** No browser sign-in, so it also runs headless: in CI, cron jobs, background agents and on your own server.
+- **Light on context.** Its three tools cost 1,005 tokens at connection, against 17,163 for Notion's open-source server, and page reads come back 82% smaller. [Benchmark →](./benchmarks)
+- **Built for agents.** Batched writes with atomic rollback and idempotency keys, retry on rate limits, markdown in and out, and errors that tell the model how to fix the call.
 
-- **Built for agents, not humans-in-the-loop.** Notion's hosted MCP is OAuth-only — it cannot run headless. This server authenticates with a token, so it works in **CI, cron jobs, background agents, and self-hosted deployments** where nobody can click "Authorize".
-- **94% smaller tool footprint at connection.** Three MCP tools (**1,005 tokens**, the operation menus included) instead of one schema per endpoint — the official open-source server loads **17,163 tokens** of tool schemas before you do anything. Operation schemas load on demand via `notion_describe`, so even a typical multi-operation task stays 75–90% lighter. [Measured, reproducible →](./benchmarks)
-- **The operational stuff is built in.** Batched mutations with atomic rollback, idempotency keys, automatic retry on rate limits, slim token-efficient responses, full markdown round-trip, and self-healing validation errors that let the model fix its own bad payloads in one turn.
+## Quick start
 
-<a href="https://glama.ai/mcp/servers/zrh07hteaa">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/zrh07hteaa/badge" alt="Notion MCP Server on Glama" />
-</a>
+**1. Get a Notion token.** Open **[app.notion.com/developers/tokens](https://app.notion.com/developers/tokens)** → **+ New token** → name it, pick your workspace → **Create token** → copy the `ntn_…` value. A Personal Access Token sees everything *you* can see, with no per-page sharing. Can't create one? See the [other token option](#token-pat-or-internal-integration).
 
-## ⚡ Quick start
-
-**Step 1 — get a Notion token (1 minute).** Open **[app.notion.com/developers/tokens](https://app.notion.com/developers/tokens)** (the **Personal access tokens** page of Notion's developer portal) → **+ New token** → name it, pick your workspace → **Create token** → copy the `ntn_…` value. That's it — a PAT sees everything *you* can see, no per-page sharing required. (Page missing or empty? Your admin disabled PATs — see [auth alternatives](#authentication-pat-recommended-vs-internal-integration).)
-
-<img src="https://raw.githubusercontent.com/awkoy/notion-mcp-server/main/assets/notion-pat-page.png" width="640" alt="Notion developer portal — the Personal access tokens page with the + New token button in the top right">
-
-**Step 2 — add the server to your client.**
-
-### Claude Code
+**2. Install it.**
 
 ```bash
-claude mcp add notion -s user \
-  -e NOTION_TOKEN=ntn_paste_your_token_here \
-  -- npx -y notion-mcp-server
+npx add-mcp notion-mcp-server --env NOTION_TOKEN=ntn_paste_your_token_here
 ```
 
-Claude Code speaks the 2025-era protocol over stdio unless told otherwise; set `MCP_PROTOCOL_NEGOTIATION=auto` in its environment and it probes for, and uses, MCP 2026-07-28 (stateless requests, cache hints on every list). The server serves both.
+[`add-mcp`](https://github.com/neon-solutions/add-mcp) finds the MCP clients on your machine and writes the config for the ones you pick: Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI, Cline, Windsurf, Zed and more. Add `-g` to install for your user instead of the current project.
 
-### Cursor
+> Keep the `--env` flag. Without it the entry is written without a token, and every call fails with an auth error.
 
-[![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/install-mcp?name=notion&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIm5vdGlvbi1tY3Atc2VydmVyIl0sImVudiI6eyJOT1RJT05fVE9LRU4iOiJZT1VSX05PVElPTl9UT0tFTiJ9fQ==)
+Or install in one click:
 
-Click the badge (then replace `YOUR_NOTION_TOKEN` in the generated entry), or add to `~/.cursor/mcp.json` yourself:
-
-```json
-{
-  "mcpServers": {
-    "notion": {
-      "command": "npx",
-      "args": ["-y", "notion-mcp-server"],
-      "env": { "NOTION_TOKEN": "ntn_paste_your_token_here" }
-    }
-  }
-}
-```
-
-### VS Code (Copilot agent mode)
-
+[![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/install-mcp?name=notion&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIm5vdGlvbi1tY3Atc2VydmVyIl0sImVudiI6eyJOT1RJT05fVE9LRU4iOiJZT1VSX05PVElPTl9UT0tFTiJ9fQ==)
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_Notion_MCP-0098FF?logo=githubcopilot)](https://insiders.vscode.dev/redirect/mcp/install?name=notion&inputs=%5B%7B%22id%22%3A%22notion_token%22%2C%22type%22%3A%22promptString%22%2C%22description%22%3A%22Notion%20Personal%20Access%20Token%20(ntn_...)%22%2C%22password%22%3Atrue%7D%5D&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22notion-mcp-server%22%5D%2C%22env%22%3A%7B%22NOTION_TOKEN%22%3A%22%24%7Binput%3Anotion_token%7D%22%7D%7D)
+[![Claude Desktop extension](https://img.shields.io/badge/Claude_Desktop-Download_.mcpb-D97757?logo=anthropic)](https://github.com/awkoy/notion-mcp-server/releases/latest/download/notion-mcp-server.mcpb)
 
-VS Code prompts for the token on install and stores it as a secret input.
+- **Cursor:** replace `YOUR_NOTION_TOKEN` in the generated entry.
+- **VS Code (Copilot agent mode):** it asks for the token and stores it as a secret.
+- **Claude Desktop:** double-click the `.mcpb` file (or drag it into Settings → Extensions) and paste your token. No Node.js needed. New to all this? The [step-by-step walkthrough](./docs/claude-desktop-walkthrough.md) assumes nothing.
 
-### Gemini CLI
+**Using Claude Code? Install it as a plugin instead.** The plugin bundles the server with a Notion workflow skill, which teaches Claude when to search, how to filter a database with `where`, and how to batch writes. Claude Code asks for the token when you install it (or later with `/plugin configure notion-mcp-server@awkoy`) and keeps it in your system keychain:
 
-```bash
-gemini extensions install https://github.com/awkoy/notion-mcp-server
+```
+/plugin marketplace add awkoy/notion-mcp-server
+/plugin install notion-mcp-server@awkoy
 ```
 
-The repo ships a `gemini-extension.json`, so Gemini CLI installs it as an extension: it asks for your Notion token once (kept in your system keychain) and starts the server with `npx`.
+The plugin runs the npm release that matches its own version and needs Node.js 22 or later. It also offers a default parent page and a read-only switch; [the plugin's README](./plugins/notion-mcp-server/README.md) has the details.
 
-### Claude Desktop
+<details>
+<summary><b>Manual setup: JSON config, Claude Code, Codex, Gemini CLI, Docker</b></summary>
 
-**Easiest: the one-click extension.** Download [`notion-mcp-server.mcpb` from the latest release](https://github.com/awkoy/notion-mcp-server/releases/latest/download/notion-mcp-server.mcpb), double-click it (or drag into Claude Desktop → Settings → Extensions), paste your Notion token when prompted — done. No config files, Node.js not required.
-
-**Or via the config file:** Settings → Developer → Edit Config, then add:
+**Any client that reads an `mcpServers` block** (Cursor's `~/.cursor/mcp.json`, Claude Desktop's `claude_desktop_config.json`, Cline, Zed, Continue…):
 
 ```json
 {
@@ -86,478 +60,160 @@ The repo ships a `gemini-extension.json`, so Gemini CLI installs it as an extens
 }
 ```
 
-Quit Claude Desktop fully (`Cmd+Q` / tray → Quit) and reopen. **Never used a config file before?** Follow the [step-by-step walkthrough for non-developers](#-complete-walkthrough-no-coding-required) — it assumes nothing.
-
-### Docker / Podman / OrbStack
+**Claude Code:**
 
 ```bash
-claude mcp add notion -s user \
-  -e NOTION_TOKEN=ntn_paste_your_token_here \
+claude mcp add notion -s user -e NOTION_TOKEN=ntn_paste_your_token_here -- npx -y notion-mcp-server
+```
+
+**Codex** (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.notion]
+command = "npx"
+args = ["-y", "notion-mcp-server"]
+env = { NOTION_TOKEN = "ntn_paste_your_token_here" }
+```
+
+**Gemini CLI:** `gemini extensions install https://github.com/awkoy/notion-mcp-server` asks for the token once and keeps it in your system keychain.
+
+**Docker** (Podman, OrbStack and colima take the same flags; `-i` is required for stdio):
+
+```bash
+claude mcp add notion -s user -e NOTION_TOKEN=ntn_paste_your_token_here \
   -- docker run --rm -i -e NOTION_TOKEN ghcr.io/awkoy/notion-mcp-server:latest
 ```
 
-The `-i` flag is required (stdio transport). The image is OCI-compliant — Podman, OrbStack, colima, Rancher Desktop, Finch, and nerdctl all work with the same flags. For a long-running HTTP container (and the health check that goes with it), see [Remote / HTTP transport](#-remote--http-transport).
+</details>
 
-**Step 3 — try it.** In a new chat:
+**3. Try it.** In a new chat:
 
 > *"Use Notion to make a page called 'Hello from my agent' and add a checklist of three things to try today."*
 
-Your AI calls `notion_write` and replies with a live page link.
+Your AI calls `notion_write` and replies with a link to the new page.
 
-## 💡 What your AI can do with it
+## What you can ask
 
-- *"Find every row in my Tasks database where Status is 'Doing' and tell me which are overdue."* — typed `where` filters, flattened rows
-- *"Rename these 50 pages to the new convention."* — one batched call, 10-way parallel, idempotent retry
-- *"Create a page from my 'Weekly review' template and fill in this summary."* — Notion templates support
-- *"Rewrite that spec page: fix the headings and add a code sample."* — full markdown round-trip (`get_page_markdown` → edit → `update_page_markdown`)
+- *"Find every row in my Tasks database where Status is 'Doing' and tell me which are overdue."*
+- *"Rename these 50 pages to the new convention."* One batched call, not 50.
+- *"Create a page from my 'Weekly review' template and fill in this summary."*
+- *"Rewrite that spec page: fix the headings and add a code sample."* The page round-trips as markdown.
 - *"Comment on yesterday's meeting notes with a one-paragraph summary."*
-- *"Upload this diagram to the design page."* — single- and multi-part file uploads
-- *"Look at the screenshot on that bug report and tell me what's wrong."* — `get_image` hands the model the picture itself
+- *"Upload this diagram to the design page."*
+- *"Look at the screenshot on that bug report and tell me what's wrong."* The model gets the image itself.
 
-Full capability list in [Features](#-features-what-this-notion-mcp-server-does); the complete operation catalog (56 ops) is in the [Operations menu](#operations-menu-56-ops-plus-one-alias).
-
-## 🧭 Which Notion MCP should you use?
-
-Three options exist. Honest guidance:
+## Which Notion MCP should you use?
 
 | | Best for | Auth | Headless / CI | Notes |
 | --- | --- | --- | --- | --- |
-| **[Notion hosted MCP](https://developers.notion.com/guides/mcp/get-started-with-mcp)** (`mcp.notion.com`) | Interactive chat in claude.ai, ChatGPT, Cursor | OAuth (human must click; Notion says non-interactive auth is in the works) | ❌ | First-party, ~34 markdown tools (11 of them Custom Agent session tools that need Notion AI), some plan-gated |
-| **[Official open-source server](https://github.com/makenotion/notion-mcp-server)** | — | Token | ✅ | Notion calls it deprecated and “no longer actively maintained”; the repo says it “may sunset” it and that issues and PRs are not actively monitored |
-| **This server** | Agents, automation, CI, self-hosting, token-sensitive workloads | Token (PAT) | ✅ | Actively maintained, agent-first design below |
+| **[Notion hosted MCP](https://developers.notion.com/guides/mcp/get-started-with-mcp)** (`mcp.notion.com`) | Interactive chat in claude.ai, ChatGPT, Cursor; Notion AI features | OAuth on every plan. MCP tokens on Business and Enterprise, created by workspace owners | Business and Enterprise only | First-party and the largest tool set (meeting notes, SQL across data sources, Custom Agents); several tools need a paid plan or Notion AI |
+| **[Notion open-source server](https://github.com/makenotion/notion-mcp-server)** | — | Token | ✅ | Notion calls it deprecated and "no longer actively maintained" |
+| **This server** | Agents, automation, CI, self-hosting, long sessions | Token, every plan | ✅ | Actively maintained; 3 tools, batched and idempotent writes |
 
-If you just want to chat with your Notion in claude.ai's web UI, use Notion's hosted connector — it's one click. Use **this** server when your agent runs unattended, when context/token cost matters, or when you want batch/idempotent semantics and self-hosting.
+To chat with Notion in claude.ai or ChatGPT, Notion's hosted connector is one click. Use this server when an agent runs unattended, when your plan has no MCP tokens, when context cost matters, or when you want it on your own host. [Detailed comparison →](./docs/comparison.md)
 
-<details>
-<summary><b>Detailed comparison vs. the official open-source server</b></summary>
+## Configuration
 
-| Capability | Official Notion MCP (open source) | **This server** |
-| --- | --- | --- |
-| **Tool surface** | 24 tools (one per endpoint), 17,163 tokens loaded into context | **3 tools**, 1,005 tokens — [94% less schema at connection](./benchmarks) |
-| **Operations covered** | ~24 endpoints | **56 operations** (plus a `trash_page` alias) across pages, blocks, databases, data sources, views, templates, comments, users, files |
-| **Batch mutations** | Not documented | ✅ Universal `{ items: [...] }` envelope; up to **10 in parallel** |
-| **Atomic batches + rollback** | Not documented | ✅ `atomic: true` aborts on first failure, best-effort archives entities created earlier |
-| **Idempotency** | Not documented | ✅ `idempotency_key` — same key + op returns the cached result for 5 minutes |
-| **Rate-limit handling** | 429s bubble up | ✅ Token-bucket limiter (3 req/s default) + exponential backoff, honors `Retry-After` |
-| **Response shapes** | Raw Notion SDK JSON | **Slim shapers** drop noise by default; `verbose: true` opts out |
-| **Database queries** | Raw `properties` bag per row | **Flattened** name → primitive map (all 20+ property types) |
-| **Wire format** | Default SDK serialization | **Compact JSON** — ~30% smaller payloads |
-| **Markdown** | Page-level markdown tools | ✅ Markdown accepted by `create_page` / `append_blocks` / `update_block` / comments + full round-trip (`get_page_markdown` / `update_page_markdown`), full GFM |
-| **Templates** | — | ✅ `create_page` from a Notion template + `list_data_source_templates` discovery |
-| **File uploads** | Not in the documented tool surface | ✅ Single- and multi-part (5 MB chunks), MIME inferred |
-| **Validation errors** | Plain error string | **Self-healing**: `{ code, message, path, issues, schema, example, fix }` — corrected in one round-trip |
-| **Notion API version** | — | Pinned `2026-03-11` (data sources, views, templates) |
+### Token: PAT or internal integration
 
-**Real-world impact:**
-
-- **Renaming 50 pages** — one `notion_write` call with `{ items: [...], concurrency: 10 }` instead of 50 separate tool calls through the agent's reasoning loop: roughly an order of magnitude faster, and the prompt-token savings are the bigger win.
-- **Tool list in context** — 3 schema blobs per conversation instead of ~24, no matter which of the 56 operations get called; the operation menu ships inside them as enums, so the model never has to read a resource to learn what exists.
-- **Reading a 100-row database** — flattened rows are typically **5–10× fewer tokens** than the raw `properties` bag, with no information loss.
-
-</details>
-
-## 🪄 Complete walkthrough (no coding required)
-
-<details>
-<summary><b>Set up Claude Desktop + Notion in 5 minutes — assumes you've never seen a config file</b></summary>
-
-### What you'll need
-
-1. A Notion account.
-2. The [Claude Desktop app](https://claude.ai/download).
-3. About 5 minutes.
-
-### Step 1 — Get your Notion token
-
-A Personal Access Token (PAT) is like a key that lets the AI act as **you** inside Notion — it sees every page you can see, with no per-page setup.
-
-1. Open **[app.notion.com/developers/tokens](https://app.notion.com/developers/tokens)** while logged into Notion — that's the **Personal access tokens** page of Notion's developer portal (also reachable from the app via **Settings → Connections → Develop or manage integrations** → **Personal access tokens** in the sidebar).
-2. Click **+ New token**.
-3. Name it (e.g. `Claude`), pick the workspace, leave the default **Notion API** capability checked, click **Create token**.
-
-   <img src="https://raw.githubusercontent.com/awkoy/notion-mcp-server/main/assets/notion-new-token-modal.png" width="460" alt="The New personal access token dialog: enter a token name, pick the workspace it has access to, keep the Notion API capability checked, then press Create token">
-
-4. **Copy the token now** — Notion shows it only once. It starts with `ntn_`. Treat it like a password.
-
-> PATs **expire 1 year after creation** — set a reminder to rotate. No "Personal access tokens" tab? Your admin disabled them; use the [Internal Integration alternative](#authentication-pat-recommended-vs-internal-integration).
-
-### Step 2 — Tell Claude Desktop about the server
-
-1. Open Claude Desktop → **Claude** menu (top-left on Mac, hamburger on Windows) → **Settings** → **Developer** → **Edit Config**.
-2. A file named `claude_desktop_config.json` opens. Don't panic at the curly braces — it's just text.
-3. Select all (`Cmd+A` / `Ctrl+A`), delete, and paste:
-
-```json
-{
-  "mcpServers": {
-    "notion": {
-      "command": "npx",
-      "args": ["-y", "notion-mcp-server"],
-      "env": {
-        "NOTION_TOKEN": "ntn_paste_your_token_here"
-      }
-    }
-  }
-}
-```
-
-> This block tells Claude Desktop how to launch the connector. `npx` downloads and runs it automatically the first time. The only thing you change is the token.
-
-4. Replace `ntn_paste_your_token_here` with your token — **keep the quotation marks**.
-5. Save (`Cmd+S` / `Ctrl+S`).
-6. **Quit Claude Desktop completely** (Mac: `Cmd+Q`; Windows: tray icon → Quit) and reopen it.
-
-### Step 3 — Check and try
-
-Type **`/`** in a new chat — you should see `notion_read`, `notion_write` and `notion_describe` in the list. Then ask:
-
-> *"Use Notion to make a new page called 'Hello from Claude' and add a checklist of three things I want to try today."*
-
-Claude calls the tool and replies with a page link. If something's off, it's almost always a token typo or Claude Desktop not fully quit — see [Troubleshooting](#-troubleshooting-the-notion-mcp-server).
-
-</details>
-
-## 🔧 Configuration
-
-### Authentication: PAT (recommended) vs. Internal Integration
-
-Both use the same `NOTION_TOKEN` env var — only where you get the token differs.
+Both go in the same `NOTION_TOKEN` env var; only where you get them differs.
 
 | | **Personal Access Token** (recommended) | **Internal Integration** (scoped) |
 | --- | --- | --- |
 | Where | [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens) → **+ New token** | [app.notion.com/developers/connections](https://app.notion.com/developers/connections) → **+ New connection** |
 | Scope | Everything **you** can see | Only pages where you clicked **• • • → Connect → \<integration\>** |
-| Friction | None | Per-page Connect step for every page/database |
-| Use when | Default: personal + team workspaces, prototyping | Admin requires explicit per-resource scoping, or shared production bots |
+| Use when | Default: personal and team workspaces | You can't create a PAT, or an admin wants explicit per-page scoping |
 
-> 💡 Most `object_not_found` errors are a wrong auth choice, not a bug: an Internal Integration token that was never Connected to the page. Switch to a PAT.
-
-<details>
-<summary><b>PAT details: capabilities, expiry, revocation, admin-disabled fallback</b></summary>
-
-**Can:** read every page you have access to; create/update pages and databases where you have edit rights; comment as you; upload files.
-**Can't:** access pages you can't see; bypass workspace permissions; act as another user; change admin settings. A PAT's scope = your account — if you lose access to a page, so does the PAT. Issue separate tokens per teammate.
-
-**Expiry:** PATs expire **1 year after creation** ([Notion docs](https://developers.notion.com/guides/get-started/personal-access-tokens)); set a reminder for ~11 months.
-
-**Revoking:** [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens) → **Revoke** next to the token (immediate). Workspace admins can revoke anyone's from **Settings & members → Connections → All personal access tokens**.
-
-**Admin disabled PATs?** Ask them to enable, or create an Internal Integration at [app.notion.com/developers/connections](https://app.notion.com/developers/connections) (**+ New connection**) and **• • • → Connect** it to every page the agent should touch — same `NOTION_TOKEN` env var.
-
-Official reference: [PAT guide](https://developers.notion.com/guides/get-started/personal-access-tokens) · [Authorization overview](https://developers.notion.com/docs/authorization).
-
-</details>
+- **Who can create a PAT.** Workspace owners always can. On Free and Business plans only owners can by default, on Plus every member can, and admins can change the policy on Business and Enterprise. Guests can't.
+- **Expiry and revoking.** You pick the lifetime when you create it, a year at most. Revoke it on the same tokens page; it stops working immediately. Details: [Notion's PAT guide](https://developers.notion.com/guides/get-started/personal-access-tokens).
+- **`object_not_found` on a page you can see?** That's an Internal Integration that was never Connected to the page. Connect it, or switch to a PAT.
 
 ### Environment variables
 
 | Env var | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `NOTION_TOKEN` | ✅ | — | PAT (`ntn_…`, recommended) or Internal Integration secret (`secret_…` / `ntn_…`) |
-| `NOTION_PAGE_ID` | — | — | Default parent for `create_page` / `create_database` when no `parent` is passed (page → Share → Copy link; the whole URL or the bare 32-char id both work) |
-| `NOTION_RATE_LIMIT` | — | `3` | Requests/second for the shared limiter (Notion's documented per-integration limit) |
-| `NOTION_READ_ONLY` | — | — | `true`/`1`/`yes` disables every write operation in one switch |
-| `NOTION_ALLOWED_OPERATIONS` | — | all | Comma-separated allowlist of operations or group presets — see [Restricting operations](#restricting-operations) |
-| `NOTION_BLOCKED_OPERATIONS` | — | — | Comma-separated blocklist (same vocabulary); wins over the allowlist |
-| `NOTION_CONFIRM_DESTRUCTIVE` | — | — | `true`/`1` makes every destructive operation ask you to confirm first, through MCP elicitation — see [Restricting operations](#restricting-operations) |
-| `NOTION_UPLOAD_ROOT` | — | — | Confine `upload_file`'s `path` source to one directory. Unset, a `path` source can read any file the server process can — set this if a model composes the path. Relative paths resolve inside it; symlinks are resolved before the check, so they can't point out — see [Files](#files) |
-| `NOTION_FILE_URLS` | — | `full` | `ref` replaces Notion's signed file URLs (~1,650 chars, valid for an hour) in slim responses with short `notion-file:` refs that `get_file_url` / `get_image` resolve on demand — see [Files](#files) |
-| `HTTPS_PROXY` / `HTTP_PROXY` | — | — | Route all outbound traffic — Notion API calls and the downloads in `get_image` / `upload_file`'s `url` source — through an HTTP(S) proxy (standard env vars, lowercase also accepted) |
+| `NOTION_TOKEN` | ✅ | — | PAT (`ntn_…`) or Internal Integration secret |
+| `NOTION_PAGE_ID` | — | — | Default parent for `create_page` / `create_database` when no `parent` is passed (page URL or id) |
+| `NOTION_RATE_LIMIT` | — | `3` | Requests per second (Notion's documented limit) |
+| `NOTION_READ_ONLY` | — | — | `true` disables every write operation |
+| `NOTION_ALLOWED_OPERATIONS` / `NOTION_BLOCKED_OPERATIONS` | — | — | Allowlist / blocklist of operations, see [Restricting operations](#restricting-operations) |
+| `NOTION_CONFIRM_DESTRUCTIVE` | — | — | `true` asks you before a destructive operation runs |
+| `NOTION_UPLOAD_ROOT` | — | — | Directory `upload_file`'s local `path` source is confined to (`/` for no limit). Unset: refused over HTTP, dot-named paths and system and app-data folders refused over stdio, see [Files](#files) |
+| `NOTION_UPLOAD_MAX_BYTES` | — | `1073741824` (1 GiB) | Largest file `upload_file` accepts from any source |
+| `NOTION_UPLOAD_URL_TIMEOUT_MS` | — | `30000` | Time limit for fetching a `url` source, redirects and body included |
+| `NOTION_UPLOAD_ALLOW_PRIVATE_URLS` | — | — | `true` lets a `url` source reach private, loopback and link-local addresses |
+| `NOTION_FILE_URLS` | — | `full` | `ref` swaps Notion's long signed file URLs for short refs, see [Files](#files) |
+| `HTTPS_PROXY` / `HTTP_PROXY` | — | — | Send all outbound traffic through a proxy |
 | `NOTION_DAILY_LOG_PAGE_ID` | — | — | Only used by the daily-log MCP prompt |
 
-HTTP-transport variables (`MCP_TRANSPORT`, `PORT`, `HOST`, `MCP_AUTH_TOKEN`, …) are covered in [Remote / HTTP transport](#-remote--http-transport).
-
-> **Upgrading from v1.x or v2.x?** Your env vars all still work unchanged. The only break is the tool surface (v1's five tools, then v2's `notion_execute`, became `notion_read` + `notion_write`; `notion_describe` is unchanged); modern clients rediscover tools automatically. Details: [MIGRATION.md](./MIGRATION.md).
+HTTP variables are in [Remote / HTTP transport](#remote--http-transport). Upgrading from v1 or v2? Every env var still works; the tool names changed, see [MIGRATION.md](./MIGRATION.md).
 
 ### Restricting operations
 
-Limit what an agent can do with `NOTION_ALLOWED_OPERATIONS` (allowlist) and/or `NOTION_BLOCKED_OPERATIONS` (blocklist) — each a comma-separated list of **group presets** or exact **operation names**.
+`NOTION_READ_ONLY=true` turns off every write. For finer control, `NOTION_ALLOWED_OPERATIONS` and `NOTION_BLOCKED_OPERATIONS` take comma-separated operation names or presets: `read`, `write`, `destructive` (archive, trash and delete), or a family (`pages`, `blocks`, `databases`, `data_sources`, `views`, `comments`, `users`, `files`). The blocklist wins.
 
-| Preset | Expands to |
-| --- | --- |
-| `read` | every non-mutating operation |
-| `write` | every mutating operation |
-| `destructive` | operations whose purpose is removal (`archive_page`/`trash_page`, `delete_block`, `batch_mixed_blocks`, `delete_comment`, `delete_view`) |
-| `pages` `blocks` `databases` `data_sources` `views` `comments` `users` `files` | every operation in that family (read **and** write) |
-
-Read-only deployment (most common):
-
-```json
-{ "env": { "NOTION_TOKEN": "ntn_xxx", "NOTION_ALLOWED_OPERATIONS": "read" } }
-```
-
-Everything except destructive ops:
-
-```json
-{ "env": { "NOTION_BLOCKED_OPERATIONS": "destructive" } }
-```
-
-Mix presets and individual ops:
-
-```json
+```jsonc
+{ "env": { "NOTION_ALLOWED_OPERATIONS": "read" } }                       // read-only
+{ "env": { "NOTION_BLOCKED_OPERATIONS": "destructive" } }                // everything except removals
 { "env": { "NOTION_ALLOWED_OPERATIONS": "read,append_blocks,add_page_comment" } }
 ```
 
-**Rules:** case-insensitive; unknown tokens ignored with a warning; blocklist wins; an allowlist that resolves to zero operations disables **everything** (fail-closed). Disabled operations disappear from the tools' `operation` enums, from `notion_describe` and from the `notion://operations` menu, so a call naming one fails validation before it runs; when no write operation is enabled (`NOTION_READ_ONLY`, or an allowlist of reads) `notion_write` is not advertised at all.
+Disabled operations disappear from the tool schemas, so the model never sees them. The server prints what resolved at startup, for example `Operation access: 22/48 enabled (allow=read; block=(none))`.
 
-On startup the server logs one line to stderr summarizing what resolved — check it first if the config doesn't behave as expected:
-
-```text
-Operation access: 22/48 enabled (allow=read; block=(none))
-```
-
-**Confirm instead of block.** `NOTION_CONFIRM_DESTRUCTIVE=true` keeps destructive operations enabled but makes `notion_write` ask *you* before running one, through [MCP elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation) — an `elicitation/create` request on 2025-era clients, an `input_required` round trip on MCP 2026-07-28 clients, where the retry carries a sealed `requestState` that only matches the call it was minted for: a yes/no dialog in your client that names the operation and its target — the page, database, data source or block title when one retrieve can fetch it (bounded to 5 s), otherwise the id; for a batch, how many items. Restores (`restore_page`, `restore_block`, `delete_database` / `delete_data_source` with `in_trash: false`) and a `batch_mixed_blocks` call with no `delete` entry do not prompt, and a blocked operation is still rejected with `operation_not_allowed` before anyone is asked. Decline, cancel or answer no and the call returns `confirmation_declined`; the server instructions tell the model not to retry it and to ask you instead. A client that has not declared the elicitation capability gets `confirmation_unavailable` rather than a silent run — use a client that supports elicitation, unset the variable, or block destructive operations outright with `NOTION_BLOCKED_OPERATIONS=destructive`.
-
-<details>
-<summary><b>Per-operation reference & limitations</b></summary>
-
-| Domain | Read | Write |
-| --- | --- | --- |
-| `pages` | `search_pages` `get_page` `get_page_markdown` | `create_page` `set_page_title` `set_page_property` `set_page_properties` `update_page_markdown` `move_page` `reorder_child_pages` `restore_page` `archive_page`† `trash_page`† |
-| `blocks` | `get_block` `get_block_children` | `append_blocks` `update_block` `restore_block` `delete_block`† `batch_mixed_blocks`† |
-| `databases` | `query_database` | `create_database` `update_database` `delete_database`† |
-| `data_sources` | `list_data_sources` `get_data_source` `list_data_source_templates` | `update_data_source` `delete_data_source`† |
-| `views` | `list_views` `get_view` `query_view` | `create_view` `update_view` `delete_view`† |
-| `comments` | `list_comments` `get_comment` | `add_page_comment` `add_discussion_comment` `update_comment` `delete_comment`† |
-| `users` | `list_users` `get_user` `get_bot_user` `get_self` | — |
-| `files` | `list_file_uploads` `get_file_upload` `get_file_url` `get_image` | `upload_file` |
-
-† = also in the `destructive` group.
-
-**Limitations** (control is per-operation, not per-parameter): `update_page_markdown` is a *write* op that can replace a page body, and blocking `destructive` does **not** disable it. For a guaranteed no-mutation deployment use `NOTION_ALLOWED_OPERATIONS=read` or `NOTION_READ_ONLY=true`. MCP *prompts* may still mention disabled operations, but execution is rejected.
-
-</details>
+To be asked instead of blocked, set `NOTION_CONFIRM_DESTRUCTIVE=true`: before a destructive operation runs, your client shows a yes/no dialog naming the target. The client has to support MCP elicitation. The full rules, the per-operation list and the limits of per-operation control are in [docs/configuration.md](./docs/configuration.md#restricting-operations).
 
 ### Files
 
-**Uploads.** `upload_file` takes its bytes as `base64`, a public `url`, or a local `path` the server reads directly. A `path` source can read any file the server process can, so when a model composes the path set `NOTION_UPLOAD_ROOT` to confine it: relative paths resolve inside the root, and symlinks are resolved before the check so they cannot point out of it.
+`upload_file` accepts base64, a public URL or a local path, up to `NOTION_UPLOAD_MAX_BYTES` (1 GiB by default). Since the model picks the source, the server guards the two it reads itself:
 
-**File URLs.** Notion mints a fresh signed S3 URL for every hosted file on every read — about 1,650 characters (~500 tokens), valid for an hour, different each time, and easy for a small model to mangle. `NOTION_FILE_URLS=ref` replaces them in the slim responses (`get_page`, `search_pages`, `query_database`, `query_view`, `get_block`, `get_block_children`, …) with short, stable refs:
+- **Local paths.** Set `NOTION_UPLOAD_ROOT` to the directory uploads may come from; paths outside it are refused, symlinks included. Without it, path sources are off over HTTP, and over stdio a path is refused when it goes through a dot-named file or directory (`~/.ssh`, `~/.aws`, `.env`) or lies under a system or app-data folder (`/proc`, `/dev`, `~/Library`, `%APPDATA%`), where MCP clients keep your token. `NOTION_UPLOAD_ROOT=/` turns the limit off. Inside a root every file is readable, `.env` and `.git` included, so over HTTP pick a root that holds only files you would hand to whoever can call the server.
+- **URLs.** http and https only. Every hop, redirects included, must resolve to a public address, so loopback, private networks and cloud metadata endpoints are refused; `NOTION_UPLOAD_ALLOW_PRIVATE_URLS=true` lifts that for an intranet. The fetch stops after `NOTION_UPLOAD_URL_TIMEOUT_MS` (30 s) or once the body passes the size limit.
 
-| Ref | Names |
-| --- | --- |
-| `notion-file:block/<block-id>` | The file in an image block |
-| `notion-file:page/<page-id>/<property>/<index>` | One entry of a page's `files` property (property name URL-encoded) |
+Notion's signed file URLs are about 500 tokens each and expire within an hour. `NOTION_FILE_URLS=ref` replaces them in responses with short `notion-file:` refs that `get_file_url` and `get_image` resolve on demand. [How refs work →](./docs/configuration.md#files)
 
-Two read operations turn a ref back into content. Both re-read the object through the Notion API, so a ref stays valid for as long as the file does:
+## Remote / HTTP transport
 
-| Operation | Payload | Returns |
-| --- | --- | --- |
-| `get_file_url` | `{ ref }` | `{ ref, url }` — a fresh signed URL, good for about an hour |
-| `get_image` | `{ ref }` (a ref, or a bare image-block id) | The image itself as MCP image content, so the model can look at it. Only `image/*` responses up to 5 MB; anything else is a tool error |
-
-`get_image` fetches only the URL Notion returned for a Notion-hosted file, never a URL supplied by the caller — so it cannot be steered at a LAN, a cloud metadata endpoint, or an exfil host. External URLs (linked images, `external` files) are short and stable already: they pass through untouched in either mode, and `get_image` returns them as text rather than fetching them. `get_page_markdown` is Notion's own rendered markdown and is not rewritten. The default, `full`, leaves every response as before.
-
-## 🌐 Remote / HTTP transport
-
-By default the server speaks **stdio** (the local path above). To run it as a remote/hosted endpoint — web clients, networked agents, shared deployments — set `MCP_TRANSPORT=http`:
+The server speaks stdio by default. Set `MCP_TRANSPORT=http` to run it as a Streamable HTTP endpoint for web clients, networked agents and shared deployments:
 
 ```bash
 MCP_TRANSPORT=http PORT=3000 NOTION_TOKEN=ntn_xxx npx -y notion-mcp-server
 # -> notion-mcp-server vX.Y.Z running on http://127.0.0.1:3000/mcp
 ```
 
-It serves MCP **Streamable HTTP** on `/mcp` for both current protocol generations, chosen per request from what the client sends: **MCP 2026-07-28** clients get the stateless path (every `POST` stands alone — no session, `server/discover`, cache hints on every list), **2024-11-05 … 2025-11-25** clients get sessions via the `mcp-session-id` header plus the `GET` stream and `DELETE`; a `GET`/`DELETE` without a session id is answered 405. There is also an unauthenticated `GET /health`. It's **single-tenant** — every request acts as the one `NOTION_TOKEN` the process started with.
-
 | env | default | meaning |
 | --- | --- | --- |
 | `MCP_TRANSPORT` | `stdio` | set to `http` to enable HTTP |
 | `PORT` | `3000` | listen port (`0` = OS-assigned) |
-| `HOST` | `127.0.0.1` | bind address; set `0.0.0.0` to expose externally (**only with `MCP_AUTH_TOKEN`**) |
+| `HOST` | `127.0.0.1` | bind address; `0.0.0.0` exposes it externally (**only with `MCP_AUTH_TOKEN`**) |
 | `MCP_AUTH_TOKEN` | — | when set, every `/mcp` request must send `Authorization: Bearer <token>` |
-| `MCP_ALLOWED_HOSTS` | localhost + bound host | comma-list for DNS-rebinding `Host` allowlist |
-| `MCP_ALLOWED_ORIGINS` | localhost origins | comma-list for browser `Origin` allowlist |
+| `MCP_ALLOW_UNAUTHENTICATED` | off | `true` lets a non-loopback `HOST` start without `MCP_AUTH_TOKEN`, for when an authenticating proxy sits in front |
+| `MCP_ALLOWED_HOSTS` | localhost + bound host | comma-list for the DNS-rebinding `Host` allowlist |
+| `MCP_ALLOWED_ORIGINS` | localhost origins | comma-list for the browser `Origin` allowlist |
 
-> ⚠️ **Whoever reaches `/mcp` acts as your `NOTION_TOKEN`.** On loopback (the default) that's just local processes. Before binding a non-loopback `HOST`, set `MCP_AUTH_TOKEN` (the server warns if you don't) and/or front it with an authenticating reverse proxy.
+> ⚠️ **Whoever reaches `/mcp` acts as your `NOTION_TOKEN`.** On loopback, the default, that means local processes only. A non-loopback `HOST` refuses to start without `MCP_AUTH_TOKEN`; put TLS in front of it too.
 
-> Claude Desktop builds affected by [anthropics/claude-code#93290](https://github.com/anthropics/claude-code/issues/93290) send a 2026-07-28 body under a `MCP-Protocol-Version: 2025-11-25` header. The server realigns that one known mismatch so those builds work; every other header/body disagreement gets the rejection the spec prescribes (`-32020`).
-
-Connect from clients that support headers (Claude Code, Cursor, VS Code):
+Over HTTP, `upload_file` takes no local paths unless `NOTION_UPLOAD_ROOT` is set, since the caller may not be on the server's machine. Base64 and URL sources work as usual, see [Files](#files).
 
 ```bash
 claude mcp add --transport http notion https://your-host/mcp \
   --header "Authorization: Bearer <MCP_AUTH_TOKEN>"
 ```
 
-Try it locally:
+Docker, health checks and protocol versions: [docs/http-transport.md](./docs/http-transport.md).
 
-```bash
-curl http://127.0.0.1:3000/health
-# -> {"status":"healthy","transport":"http","port":3000}
-npx @modelcontextprotocol/inspector --transport http --server-url http://127.0.0.1:3000/mcp
-```
+## Tools and operations
 
-In Docker:
-
-```bash
-docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -e HOST=0.0.0.0 -e MCP_AUTH_TOKEN=change-me \
-  -p 3000:3000 ghcr.io/awkoy/notion-mcp-server
-```
-
-`HOST=0.0.0.0` is what makes the published port reachable — inside the container `127.0.0.1` is the container's own loopback — and a non-loopback bind is exactly where `MCP_AUTH_TOKEN` matters.
-
-**Health check.** The image ships without a `HEALTHCHECK`: it starts in stdio mode, where nothing listens, so a built-in probe of `/health` would mark every stdio container unhealthy. For an HTTP deployment add one yourself — the same command sits in the `Dockerfile`, commented out:
-
-```bash
-docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -e HOST=0.0.0.0 -e MCP_AUTH_TOKEN=change-me \
-  -p 3000:3000 \
-  --health-cmd "node -e \"fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"" \
-  --health-interval 30s --health-timeout 3s --health-start-period 5s --health-retries 3 \
-  ghcr.io/awkoy/notion-mcp-server
-```
-
-Or in Compose:
-
-```yaml
-services:
-  notion-mcp-server:
-    image: ghcr.io/awkoy/notion-mcp-server:latest
-    environment:
-      NOTION_TOKEN: ${NOTION_TOKEN:?NOTION_TOKEN is required}
-      MCP_TRANSPORT: http
-      HOST: 0.0.0.0
-      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?MCP_AUTH_TOKEN is required}
-    ports: ["3000:3000"]
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 30s
-      timeout: 3s
-      start_period: 5s
-      retries: 3
-```
-
-## 🌟 Features: what this Notion MCP server does
-
-- **Three-tool surface** — `notion_read` (look), `notion_write` (change), `notion_describe` (learn the shape). Each tool's `operation` is an enum of what it runs, so the tool list is the menu and your client can auto-approve reads while writes still ask.
-- **Universal batch envelope** — every mutating op accepts `{ items: [...], atomic?, idempotency_key?, concurrency? }` with per-item validation and results.
-- **Atomic batches with best-effort rollback** — `atomic: true` aborts on first failure and archives anything created earlier in the batch.
-- **Idempotency keys** — same `(operation, idempotency_key)` returns the cached result for 5 minutes. Safe to retry on flaky networks.
-- **Rate-limit + retry baked in** — token-bucket limiter (3 req/s default, `NOTION_RATE_LIMIT` to change) with exponential backoff on 429/5xx/timeouts, honoring `Retry-After`.
-- **Self-healing validation errors** — failures return `{ schema, example, fix }` so the model corrects bad payloads in one round-trip.
-- **Markdown everywhere** — `create_page` / `append_blocks` / `update_block` / comment bodies accept a `markdown` string (full GFM: headings 1–4, lists, nested to-dos, blockquotes, fenced code with language detection, tables, images, dividers, inline formatting), plus full round-trip via `get_page_markdown` / `update_page_markdown`.
-- **Notion templates** — `create_page` can apply a data source's template (`template: { type: "template_id" | "default" }`), with `list_data_source_templates` to discover template IDs.
-- **Database views** — list/get/query/create/update/delete views; `query_view` runs a view's stored filters/sorts and returns hydrated rows.
-- **Plain property values** — a database row's properties take plain values: `{ Status: "Done", "Due Date": "2026-10-01", Tags: ["a", "b"], Done: true, Notes: null }`. The server reads the data source's schema (cached for 5 minutes) and types each value; `title` always addresses the title property, an unknown property name or `status` option is rejected with the valid names, and the full Notion shapes still work. `get_data_source` lists `select` / `multi_select` / `status` options inline.
-- **Typed `where` filter shorthand** — `query_database` takes `{ Status: "Done", Priority: { in: ["High", "Medium"] }, OR: [...] }`, resolves each property's type from the data source's schema and compiles it to Notion filter JSON; `sorts: ["-Due Date"]` sorts descending. Raw `filter` / object sorts still accepted.
-- **Warnings, not rejections** — an unknown top-level field is ignored, the call still runs, and the result's `warnings` names the field and the fields the operation accepts; a property name that differs only in case is corrected with a warning. No extra round-trip when the rest of the payload was right.
-- **Slim responses + flattened rows** — noisy fields dropped by default, `query_database` rows flattened to name → primitive maps, compact JSON wire format (~30% smaller). `verbose: true` opts out per call.
-- **File uploads** — single-part and multi-part (5 MB chunks) transparently; MIME inferred from filename.
-- **Short file refs + image reads** — `NOTION_FILE_URLS=ref` swaps Notion's ~500-token signed file URLs for `notion-file:` refs; `get_file_url` mints a fresh URL and `get_image` returns the picture as MCP image content. See [Files](#files).
-- **Opt-in auto-pagination** — `paginate: true` on `search_pages` / `list_comments` / `query_database` walks `next_cursor` for you (default cap ≈ 1000 items).
-- **HTTP(S) proxy support** — standard `HTTPS_PROXY` / `HTTP_PROXY` env vars for corporate networks.
-- **Access control** — `NOTION_READ_ONLY` one-switch read-only mode plus per-operation allow/block lists.
-
-## 📚 MCP tools (`notion_read`, `notion_write` & `notion_describe`)
-
-The server exposes exactly **three** MCP tools — your client loads three schemas regardless of which of the 56 operations gets called. `notion_read` runs the read operations and `notion_write` the write operations; each tool's `operation` field is an enum of exactly the operations enabled on this server, so the menu ships with the tool list, a client can validate a call before sending it, and a name sent to the wrong tool fails in one round-trip with a message naming the right one.
+Three tools, whichever of the 56 operations you end up calling: `notion_read` runs reads, `notion_write` runs writes, and `notion_describe` returns an operation's JSON Schema with a working example. Every id field also accepts a Notion URL, so paste what **Share → Copy link** gives you. Call examples, batch options and MCP resources: [docs/operations.md](./docs/operations.md).
 
 ### Per-tool permissions
 
-MCP clients grant permissions by tool name, so the split lets you approve reads once and keep writes behind a prompt. In Claude Code (`~/.claude/settings.json` or the project's `.claude/settings.json`, with `notion` being whatever you named the server):
+The read/write split lets you approve reads once and keep writes behind a prompt. In Claude Code's `settings.json` (where `notion` is whatever you named the server):
 
 ```json
-{
-  "permissions": {
-    "allow": ["mcp__notion__notion_read", "mcp__notion__notion_describe"]
-  }
-}
+{ "permissions": { "allow": ["mcp__notion__notion_read", "mcp__notion__notion_describe"] } }
 ```
 
-Cursor's MCP settings offer the same per-tool allowlist. `notion_read` is annotated `readOnlyHint: true` and `notion_write` `destructiveHint: true`, for clients that read annotations.
-
-### `notion_read`
-
-`{ operation, payload }` for any read operation — search, page and block reads, database queries, users, comments, files.
-
-```jsonc
-{ "operation": "search_pages", "payload": { "query": "Q3 plan" } }
-```
-
-```jsonc
-// a page as markdown, addressed by the link Notion copies
-{
-  "operation": "get_page_markdown",
-  "payload": { "page_id": "https://www.notion.so/Q3-plan-1f3c1a2b3c4d5e6f7a8b9c0d1e2f3a4b" }
-}
-```
-
-### `notion_write`
-
-`{ operation, payload }` for any write operation, where payload is a single object or `{ items: [...] }` for batch mode.
-
-```jsonc
-// single call
-{
-  "operation": "set_page_title",
-  "payload": { "page_id": "<page-id>", "title": "Q3 plan" }
-}
-```
-
-Every id field (`page_id`, `block_id`, `database_id`, `view_id`, …) also accepts a Notion URL — paste what **Share → Copy link** gives you and the server extracts the id. A block link's `#fragment` is used for `block_id` fields and a database link's `?v=` for `view_id` fields.
-
-```jsonc
-// batch
-{
-  "operation": "set_page_title",
-  "payload": {
-    "items": [
-      { "page_id": "<p1>", "title": "First" },
-      { "page_id": "<p2>", "title": "Second" }
-    ],
-    "atomic": false,
-    "concurrency": 3,
-    "idempotency_key": "rename-pass-2026-07-02"
-  }
-}
-```
-
-```jsonc
-// markdown shortcut (create_page, append_blocks, update_block, update_page_markdown)
-{
-  "operation": "create_page",
-  "payload": {
-    "parent": { "type": "page_id", "page_id": "<parent>" },
-    "title": "Notes",
-    "markdown": "# Heading\n\n- [ ] todo\n- [x] done\n\n```ts\nconst x = 1;\n```"
-  }
-}
-```
-
-```jsonc
-// a database row: plain property values, typed from the data source's schema
-{
-  "operation": "create_page",
-  "payload": {
-    "parent": { "type": "data_source_id", "data_source_id": "<data-source-id>" },
-    "title": "Write the report",
-    "properties": { "Status": "In Progress", "Priority": "High", "Due Date": "2026-10-01", "Tags": ["q3", "docs"] }
-  }
-}
-```
-
-```jsonc
-// upload a file and place it on a page in one call
-{
-  "operation": "upload_file",
-  "payload": {
-    "source": { "type": "path", "path": "~/Desktop/chart.png" },
-    "attach_to": { "block_id": "<page-or-block-id>", "caption": "Q3 revenue" }
-  }
-}
-```
-
-If a payload doesn't validate, the error response includes the operation's full JSON Schema, a working example, and a `fix` hint — the next call can be corrected without a `notion_describe` round-trip.
-
-### `notion_describe`
-
-Returns the JSON Schema + working example for one operation, plus `tool` (which of the two runs it) — useful before complex calls (filter expressions, mixed block batches, database property definitions).
-
-```jsonc
-{ "operation": "query_database" }
-```
-
-### Operations menu (56 ops, plus one alias)
-
-Read operations (`get_*`, `list_*`, `search_pages`, `query_database`, `query_view`) go through `notion_read`; everything else through `notion_write`. The `notion://operations` resource lists the tool next to each operation.
+### Operations menu (56 ops, plus two aliases)
 
 | Area | Operations |
 | --- | --- |
@@ -567,8 +223,12 @@ Read operations (`get_*`, `list_*`, `search_pages`, `query_database`, `query_vie
 | **Data sources** | `list_data_sources`, `get_data_source`, `update_data_source`, `rename_data_source_property`, `delete_data_source`, `list_data_source_templates` |
 | **Views** | `list_views`, `get_view`, `configure_view_properties`, `query_view`, `create_view`, `update_view`, `delete_view` |
 | **Comments** | `list_comments`, `add_page_comment`, `add_discussion_comment`, `get_comment`, `update_comment`, `delete_comment` |
-| **Users** | `list_users`, `get_user`, `get_bot_user`, `get_self` |
+| **Users** | `list_users`, `get_user`, `get_bot_user` (alias: `get_self`) |
 | **Files** | `upload_file`, `list_file_uploads`, `get_file_upload`, `get_file_url`, `get_image` |
+
+### Fork operations
+
+This fork retains ten additional operations on the upstream v3.3.0 baseline: six database analysis operations, verified data source property renaming, verified view property configuration, child-page reordering, and block restoration. The database analysis operations expose scan limits and completeness metadata; `rename_data_source_property` and `configure_view_properties` retrieve the result after writing and report verification failures.
 
 `reorder_child_pages` accepts a complete ordered permutation of every direct child-page ID under one parent and defaults to `dry_run: true`. Set `dry_run: false` explicitly to execute the reorder:
 
@@ -578,8 +238,6 @@ Read operations (`get_*`, `list_*`, `search_pages`, `query_database`, `query_vie
 
 It only writes when those child pages form one contiguous region represented by exact top-level Enhanced Markdown `<page>` tags. Intervening blocks, incomplete Markdown, unsupported representations, or a best-effort pre-write concurrency check that detects changed content are rejected without a write. After a write, the complete direct-block sequence is checked against the planned permutation; an unexpected result is reported without automatic repair. Preservation of existing child-page identities by Notion's Markdown API still requires a real synthetic verification after deployment.
 
-The authoritative list (with batchability) is served as an MCP resource at `notion://operations`.
-
 `restore_block` restores an existing trashed block by its known ID:
 
 ```json
@@ -588,119 +246,41 @@ The authoritative list (with batchability) is served as an MCP resource at `noti
 
 The operation sends no block type or content. Notion chooses the restored position; callers cannot select a different position, and the operation does not discover damaged content or automate repairs.
 
-### MCP resources
+## FAQ
 
-Clients that support resource attachment (`@`-mention) can pull Notion content into context without a tool call:
+**Does it work on the Notion Free plan?** Yes. A workspace owner can create a Personal Access Token on every plan, and the server needs nothing else.
 
-| Resource URI | Returns |
-| --- | --- |
-| `notion://operations` | Markdown cheat sheet of every enabled operation |
-| `notion://page/<page_id>` | Page body as markdown |
-| `notion://database/<data_source_id>` | Data source schema as JSON |
+**Is there a Notion MCP server without OAuth?** This one. It authenticates with a token, so nobody has to click Authorize. Notion's hosted MCP skips OAuth only on Business and Enterprise, with an MCP token a workspace owner creates.
 
-Dynamic resources route through the same auth, rate limiting, and access gating as tool calls.
+**Which clients does it work with?** Any MCP client: Claude Code, Claude Desktop, Cursor, VS Code (Copilot agent mode), Codex, Gemini CLI, Cline, Windsurf, Zed, Continue, and local models through any MCP host. More in the [FAQ](./docs/faq.md).
 
-## ❓ Troubleshooting the Notion MCP server
+## Troubleshooting
 
-- **`object_not_found` / "Could not find …"** — an Internal Integration token only sees pages explicitly Connected to it. Switch to a PAT to skip per-page sharing.
-- **"Notion auth failed" on every call** — token missing, revoked, or expired (PATs expire after 1 year). Check `NOTION_TOKEN` in your client config, then confirm the token is still listed as Active at [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens).
-- **"No parent page configured"** — pass `parent` in the call, or set `NOTION_PAGE_ID`.
-- **`multi_source_database` from `query_database` or `create_page`** — the database has multiple data sources. Call `list_data_sources`, then pass `data_source_id` (or a `data_source_id` parent) instead of `database_id`.
-- **A successful result carries `warnings`** — the call ran; each entry names a field that was ignored (misspelt or misplaced) or a property name that was corrected. Fix the payload next time, nothing to retry.
-- **Tools don't appear in Claude Desktop** — token typo (must stay inside the quotes) or the app wasn't fully quit (`Cmd+Q`, not window close) before reopening.
-- **Startup logs "Notion auth check failed" but tools work** — the startup check is best-effort; ignore if calls succeed.
-- **Docker exits immediately / "Connection closed"** — the `-i` flag is required: `docker run --rm -i …`.
-- **Docker: "NOTION_TOKEN is not set" despite `-e`** — use `-e NOTION_TOKEN` (forwards from parent env) or `-e NOTION_TOKEN=ntn_xxx`, not `-e NOTION_TOKEN ntn_xxx`.
+- **"Notion auth failed" on every call:** the token is missing, revoked or expired. Check `NOTION_TOKEN` in your client config, then that the token is still active at [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens). Installed with `add-mcp` without `--env`? Re-run it with the flag.
+- **`object_not_found` / "Could not find …":** an Internal Integration only sees pages Connected to it. Connect the page, or switch to a PAT.
+- **"No parent page configured":** pass `parent` in the call, or set `NOTION_PAGE_ID`.
+- **`multi_source_database`:** the database has several data sources. Call `list_data_sources`, then pass a `data_source_id` instead of the `database_id`.
+- **A successful result carries `warnings`:** the call ran. Each entry names a field that was ignored or a property name that was corrected.
+- **Tools don't appear in Claude Desktop:** a typo in the token (it must stay inside the quotes), or the app wasn't fully quit (`Cmd+Q`) before reopening.
+- **Startup logs "Notion auth check failed" but tools work:** the startup check is best effort; ignore it if calls succeed.
+- **Docker exits at once or says "NOTION_TOKEN is not set":** add `-i`, and write `-e NOTION_TOKEN` or `-e NOTION_TOKEN=ntn_xxx`, not `-e NOTION_TOKEN ntn_xxx`.
 
-Still stuck? [GitHub Issues](https://github.com/awkoy/notion-mcp-server/issues) · [Notion API reference](https://developers.notion.com/reference/intro) · [MCP spec](https://modelcontextprotocol.io)
+Still stuck? Check the [FAQ](./docs/faq.md) or open a [GitHub issue](https://github.com/awkoy/notion-mcp-server/issues).
 
-## 💬 FAQ: Notion MCP server
+## Privacy
 
-### What is the Notion MCP server and how does it work?
+The server runs on your machine or your own host and talks only to `api.notion.com`, over HTTPS, with the token you configure (or through your proxy when `HTTPS_PROXY` is set). No telemetry, no analytics, no server of ours in the path. The token stays where your MCP client keeps it. `get_image` fetches only the signed URLs Notion returns for files it hosts. `upload_file` reads a local file or fetches a URL only when asked to, and refuses URLs that resolve to private or loopback addresses. Notion's own handling of your data is covered by [Notion's privacy policy](https://www.notion.com/privacy).
 
-A Model Context Protocol server that connects AI assistants — Claude, Cursor, VS Code Copilot, Cline, Zed, Continue, anything that speaks MCP — to your Notion workspace. It runs locally (or in Docker, or as an HTTP endpoint) and exposes three MCP tools the AI calls to read, write and inspect Notion operations. You authenticate once with a Notion token; everything else is natural language.
-
-### How do I connect Claude to Notion using MCP?
-
-See the [Quick start](#-quick-start): get a PAT at [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens), then one `claude mcp add` command (Claude Code) or one JSON paste (Claude Desktop). Non-developers: the [complete walkthrough](#-complete-walkthrough-no-coding-required) assumes nothing.
-
-### What's the difference between this and Notion's official MCP?
-
-Notion's **hosted** MCP (`mcp.notion.com`) is OAuth-only and built for interactive chat — it can't run headless (Notion says non-interactive authorization is in the works, but not yet). Their **open-source** server is, in Notion's words, "no longer actively maintained" and exposes one tool per endpoint. This server authenticates with a token (works in CI/automation), exposes 2 tools dispatching 56 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. See [Which Notion MCP should you use?](#-which-notion-mcp-should-you-use).
-
-### Can I use it with Cursor, VS Code, ChatGPT, or Cline?
-
-Cursor, VS Code (Copilot agent mode), Cline, Zed, Continue: yes — install badges and config blocks are in the [Quick start](#-quick-start). ChatGPT's built-in connectors require OAuth-hosted servers, so use Notion's hosted MCP there; developers can still reach this server from the OpenAI API's `mcp` tool by pointing it at a self-hosted [HTTP endpoint](#-remote--http-transport) with a bearer token.
-
-### Is it safe to give an AI my Notion token?
-
-The token lives in your MCP client's local config and is only sent to `api.notion.com` over HTTPS. The server is open source — read every line. A PAT has the same access you do, so don't paste it into untrusted clients, and revoke it at [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens) if a laptop is lost. For agents that should never write, set `NOTION_READ_ONLY=true`.
-
-### Does it work with self-hosted or local-only LLMs?
-
-Yes — anything that speaks MCP stdio (or Streamable HTTP) works. The server doesn't care what's on the other side of the protocol.
-
-## 🔒 Privacy
-
-The server runs on your machine or your own host and talks only to `api.notion.com`, over HTTPS, with the token you configure. There is no telemetry, no analytics, and no server of ours in the path: nothing you read or write in Notion goes anywhere else. The token stays where your MCP client keeps it (its config file, or a keychain / secret store for clients that have one). With `HTTPS_PROXY` set, traffic goes through your proxy instead. `get_image` fetches only the signed URLs Notion returns for files it hosts, never a URL supplied by the model, and `upload_file` reads a local file only when asked to, inside `NOTION_UPLOAD_ROOT` when that is set. Notion's own handling of your data is covered by [Notion's privacy policy](https://www.notion.com/privacy).
-
-## 🛠 Development
+## Development
 
 ```bash
-git clone https://github.com/awkoy/notion-mcp-server.git
-cd notion-mcp-server
-npm install
-echo "NOTION_TOKEN=ntn_xxx" > .env
-
-npm run build       # tsc -> build/
-npm test            # vitest suite
-npm run inspector   # MCP inspector against the built binary
+git clone https://github.com/awkoy/notion-mcp-server.git && cd notion-mcp-server
+npm install && npm run build && npm test
 ```
 
-Local build instead of npx:
+Architecture, running a local build in a client, and the end-to-end test against a real workspace: [docs/development.md](./docs/development.md). PRs are welcome; run `npm test` before opening one.
 
-```bash
-claude mcp add notion -s user \
-  -e NOTION_TOKEN=ntn_xxx \
-  -- node "$(pwd)/build/index.js"
-```
-
-Everything the server logs goes to stderr, as before, and is also sent to the client as MCP `notifications/message` entries (logger `notion-mcp-server`), so it shows up in the client's own log view — VS Code's output channel, MCP Inspector, Claude Desktop's logs — where stderr is usually hidden. 2025-era clients pick the level with `logging/setLevel` (default `info`); MCP 2026-07-28 clients have no such call and ask per request with the `io.modelcontextprotocol/logLevel` envelope key — a request without it gets no log notifications. Stderr is unaffected either way. At `debug` you also get one line per `notion_read` / `notion_write` call (operation, batch size, duration, ok or error — never the payload or page content).
-
-<details>
-<summary><b>Technical details: how it's built</b></summary>
-
-- TypeScript + MCP TypeScript SDK v2 (`@modelcontextprotocol/server` + `@modelcontextprotocol/node` 2.0.0); stdio + Streamable HTTP transports; protocol revisions 2024-11-05 through 2026-07-28 (`serveStdio` / `createMcpHandler` for the stateless 2026-07-28 path, the sessionful transport for the rest)
-- Notion SDK `@notionhq/client@^5.22.0`, pinned `Notion-Version: 2026-03-11`
-- Zod 4 payload validation; emits draft-7 JSON Schema with `$defs` deduplication for error envelopes
-- Markdown → Notion blocks via `remark` / `remark-gfm`
-- Bounded-concurrency batch worker (default 3, max 10); shared token-bucket rate limiter; `withRetry` with exponential backoff around every dispatched call
-- In-memory idempotency cache (5-minute TTL, 512 entries)
-- Slim shapers per entity type with `verbose: true` opt-out
-- Vitest suite covering the markdown parser, shapers, schema emitter, dispatcher, batch semantics (partial success / atomic rollback / idempotency), access control, and HTTP transport
-
-</details>
-
-### End-to-end smoke test
-
-`npm test` runs against a mocked Notion client. `scripts/e2e.mjs` drives the built server over stdio against a real workspace — every read operation, the resources and prompts, `notion_describe` for every operation, and (with `--write`) every write operation inside one throwaway page:
-
-```bash
-npm run build
-printf 'NOTION_TOKEN=ntn_...\nNOTION_PAGE_ID=<page the token can write under>\n' > .env   # gitignored
-npm run e2e                      # read-only pass
-npm run e2e -- --write           # full pass; creates one page under NOTION_PAGE_ID and trashes it at the end
-npm run e2e -- --write --keep    # keep the test page for inspection
-npm run e2e -- --modern          # any of the above as an MCP 2026-07-28 client (stateless envelope, input_required confirmations)
-```
-
-It prints a PASS/FAIL table per check and lists any operation the run did not reach, and exits non-zero on a failure. It is not part of CI.
-
-## 🤝 Contributing
-
-PRs welcome. Fork → branch → commit → push → PR. Run `npm test` before submitting.
-
-## 📄 License
+## License
 
 MIT — see [LICENSE](./LICENSE).
 
