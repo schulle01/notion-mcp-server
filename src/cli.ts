@@ -65,21 +65,33 @@ Environment:
   NOTION_ALLOWED_OPERATIONS  comma-separated allowlist of operations or group presets
   NOTION_BLOCKED_OPERATIONS  comma-separated blocklist (same vocabulary); wins over the allowlist
   NOTION_CONFIRM_DESTRUCTIVE true/1 asks you to confirm each destructive operation (MCP elicitation)
-  NOTION_UPLOAD_ROOT         confine upload_file's path source to one directory
+  NOTION_REMOTE_CLIENTS      true: stdio serves remote clients; path uploads require NOTION_UPLOAD_ROOT
+  NOTION_UPLOAD_ROOT         confine upload_file's path source to one directory ("/" = anywhere);
+                             unset, paths are refused over HTTP, and over stdio through dot-names
+                             or under system and app-data folders (/proc, ~/Library, %APPDATA%)
+  NOTION_UPLOAD_MAX_BYTES    largest file upload_file accepts (default 1073741824, 1 GiB)
+  NOTION_UPLOAD_URL_TIMEOUT_MS
+                             time limit for upload_file's url source, redirects included (default 30000)
+  NOTION_UPLOAD_ALLOW_PRIVATE_URLS
+                             true/1 lets the url source reach private, loopback and link-local addresses
   NOTION_FILE_URLS           "ref" swaps signed file URLs for short notion-file: refs (default full)
   HTTPS_PROXY / HTTP_PROXY   route all outbound traffic through an HTTP(S) proxy (lowercase works too)
   NOTION_DAILY_LOG_PAGE_ID   only used by the daily-log MCP prompt
   MCP_TRANSPORT              stdio (default) or http
   PORT                       HTTP listen port (default 3000; 0 = OS-assigned)
   HOST                       HTTP bind address (default 127.0.0.1; 0.0.0.0 only with MCP_AUTH_TOKEN)
+  MCP_MAX_TOOL_INPUT_ELEMENTS
+                             positive integer argument element limit, HTTP and stdio (default 100000)
+  MCP_MAX_REQUEST_BODY_SIZE  positive integer native HTTP body bytes (default 1048576, 1 MiB)
   MCP_AUTH_TOKEN             HTTP: require "Authorization: Bearer <token>" on /mcp
+  MCP_ALLOW_UNAUTHENTICATED  HTTP: true starts a non-loopback HOST without MCP_AUTH_TOKEN
   MCP_ALLOWED_HOSTS          HTTP: comma-list for the DNS-rebinding Host allowlist
   MCP_ALLOWED_ORIGINS        HTTP: comma-list for the browser Origin allowlist
 
 Docs:
   README          ${REPO}#readme
-  Configuration   ${REPO}#-configuration
-  HTTP transport  ${REPO}#-remote--http-transport
+  Configuration   ${REPO}#configuration
+  HTTP transport  ${REPO}#remote--http-transport
   Changelog       ${REPO}/blob/main/CHANGELOG.md
 `;
 }

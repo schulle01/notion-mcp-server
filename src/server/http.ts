@@ -8,7 +8,8 @@ import {
   PROTOCOL_VERSION_META_KEY,
   SUPPORTED_PROTOCOL_VERSIONS,
 } from "@modelcontextprotocol/server";
-import type { HttpConfig } from "../config/http.js";
+import { isLoopbackHost, setActiveTransport, unauthenticatedBindError, type HttpConfig } from "../config/http.js";
+import { maxToolInputElements } from "../config/input-limits.js";
 import { CONFIG } from "../config/index.js";
 import { createServer, logAccessSummary, verifyNotionAuth } from "./index.js";
 import { checkAuth } from "./auth.js";
@@ -40,7 +41,21 @@ export type HttpHandle = {
   close: () => Promise<void>;
 };
 
-const MAX_BODY_BYTES = 4 * 1024 * 1024; // 4 MB
+/** Limits on the legacy session map; overridable so tests need not wait half an hour. */
+export type LegacySessionLimits = {
+  /** A session with no open response for this long is closed. */
+  idleMs: number;
+  /** How often the idle sweep runs. */
+  sweepMs: number;
+  /** Most sessions kept at once; past it a new initialize evicts the longest-idle one. */
+  max: number;
+};
+
+const LEGACY_SESSION_LIMITS: LegacySessionLimits = {
+  idleMs: 30 * 60_000,
+  sweepMs: 60_000,
+  max: 1_000,
+};
 
 const MODERN_PROTOCOL_VERSION = "2026-07-28";
 /** The 2025-era revisions the legacy stack negotiates. */
@@ -52,20 +67,31 @@ class BodyError extends Error {
   }
 }
 
-function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
+function readJsonBody(req: http.IncomingMessage, maxBytes: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let exceeded = false;
     const chunks: Buffer[] = [];
+    const refuse = () => {
+      exceeded = true;
+      chunks.length = 0;
+      reject(new BodyError(413, "Request body too large"));
+      // Keep the socket alive long enough to drain and deliver the 413.
+      req.resume();
+    };
+    const declared = req.headers["content-length"];
+    if (declared !== undefined && Number(declared) > maxBytes) {
+      refuse();
+      return;
+    }
     req.on("data", (chunk: Buffer) => {
+      if (exceeded) return;
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        reject(new BodyError(413, "Request body too large"));
-        req.destroy();
-        return;
-      }
+      if (size > maxBytes) return refuse();
       chunks.push(chunk);
     });
     req.on("end", () => {
+      if (exceeded) return;
       const raw = Buffer.concat(chunks).toString("utf8");
       if (raw.trim() === "") return resolve(undefined);
       try {
@@ -96,10 +122,11 @@ async function sendJsonRpcError(
   code: number,
   message: string
 ): Promise<void> {
-  // Fully drain the request body before responding. Ending the response while the
-  // client is still streaming the body resets the socket (ECONNRESET) and the client
-  // never sees our status — so we wait for the upload to finish first.
-  await drain(req);
+  // Oversized uploads must receive 413 even if the caller never ends its body.
+  // Discard further bytes without buffering; Connection: close below lets Node
+  // finish the response before closing the socket. Do not destroy it here.
+  if (status === 413) req.resume();
+  else await drain(req);
   if (res.headersSent || res.writableEnded || res.destroyed) return;
   const payload = JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null });
   // Connection: close — we rejected this request without reusing the socket; some
@@ -111,15 +138,6 @@ async function sendJsonRpcError(
     connection: "close",
   });
   res.end(payload);
-}
-
-function isLoopbackHost(host: string): boolean {
-  return (
-    host === "127.0.0.1" ||
-    host === "localhost" ||
-    host === "::1" ||
-    host === "[::1]"
-  );
 }
 
 /** Localhost Host-header allowlist for DNS-rebinding protection, using the
@@ -211,9 +229,58 @@ function realignProtocolVersionHeader(req: http.IncomingMessage, body: unknown):
   req.headers["mcp-protocol-version"] = MODERN_PROTOCOL_VERSION;
 }
 
-export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
+export async function startHttp(
+  config: HttpConfig,
+  limits: LegacySessionLimits = LEGACY_SESSION_LIMITS
+): Promise<HttpHandle> {
+  maxToolInputElements(); // Validate before binding; createServer applies the limit.
+  const bindError = unauthenticatedBindError(config);
+  if (bindError) throw new Error(bindError);
+  setActiveTransport("http");
+
   // Legacy leg: one transport per session; the connected server lives behind it.
   const transports: Record<string, NodeStreamableHTTPServerTransport> = {};
+  // A 2025-era client that goes away without a DELETE would leave its session
+  // here for good. Each session's last request time and count of open
+  // responses (a standalone GET stream stays open for as long as the client
+  // listens) let a sweep close the ones nobody is using, and the cap keeps a
+  // client that re-initializes in a loop from growing the map in between.
+  const activity = new Map<string, { lastSeen: number; open: number }>();
+
+  async function closeSession(id: string): Promise<void> {
+    const transport = transports[id];
+    delete transports[id];
+    activity.delete(id);
+    await transport?.close().catch(() => {});
+  }
+
+  /** Count `res` as open on session `id` until it closes. */
+  function track(id: string, res: http.ServerResponse): void {
+    const a = activity.get(id);
+    if (!a) return;
+    a.open++;
+    a.lastSeen = Date.now();
+    res.once("close", () => {
+      a.open--;
+      a.lastSeen = Date.now();
+    });
+  }
+
+  /** At the cap: make room by closing the session idle the longest, if any is idle. */
+  async function makeRoom(): Promise<boolean> {
+    if (activity.size < limits.max) return true;
+    let oldest: string | undefined;
+    let oldestSeen = Infinity;
+    for (const [id, a] of activity) {
+      if (a.open === 0 && a.lastSeen < oldestSeen) {
+        oldest = id;
+        oldestSeen = a.lastSeen;
+      }
+    }
+    if (oldest === undefined) return false;
+    await closeSession(oldest);
+    return true;
+  }
 
   // Modern leg: one server per request, no session state at all. `legacy:
   // "reject"` because everything legacy-shaped has already been routed to the
@@ -224,9 +291,11 @@ export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
   // not a server fault: a warning line, no stack trace.
   const modern = createMcpHandler(createServer, {
     legacy: "reject",
+    maxRequestBodySize: config.maxRequestBodySize,
     onerror: (error) => log.warning(`MCP handler: ${error.message}`),
   });
   const serveModern = toNodeHandler(modern, {
+    maxRequestBodySize: config.maxRequestBodySize,
     onerror: (error) => log.warning(`MCP adapter: ${error.message}`),
   });
 
@@ -250,6 +319,14 @@ export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
   });
   const addr = httpServer.address();
   const port = typeof addr === "object" && addr ? addr.port : config.port;
+
+  const sweep = setInterval(() => {
+    const cutoff = Date.now() - limits.idleMs;
+    for (const [id, a] of activity) {
+      if (a.open === 0 && a.lastSeen < cutoff) void closeSession(id);
+    }
+  }, limits.sweepMs);
+  sweep.unref();
 
   const allowedHosts =
     config.allowedHosts.length > 0
@@ -291,7 +368,7 @@ export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
     if (req.method === "POST") {
       let body: unknown;
       try {
-        body = await readJsonBody(req);
+        body = await readJsonBody(req, config.maxRequestBodySize);
       } catch (e) {
         const status = e instanceof BodyError ? e.status : 400;
         await sendJsonRpcError(req, res, status, -32700, e instanceof Error ? e.message : "Parse error");
@@ -313,9 +390,10 @@ export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
     if (sessionId && (req.method === "GET" || req.method === "DELETE")) {
       const transport = transports[sessionId];
       if (!transport) {
-        await sendJsonRpcError(req, res, 400, -32000, "Bad Request: invalid or missing session ID");
+        await sessionNotFound(req, res);
         return;
       }
+      track(sessionId, res);
       await transport.handleRequest(req, res);
       return;
     }
@@ -344,22 +422,37 @@ export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
     sessionId: string | undefined
   ): Promise<void> {
     let transport = sessionId ? transports[sessionId] : undefined;
-    if (!transport) {
+    if (transport) {
+      track(sessionId!, res);
+    } else {
       if (!sessionId && isInitializeRequest(body)) {
+        if (!(await makeRoom())) {
+          await sendJsonRpcError(req, res, 503, -32000, "Too many open sessions; try again later");
+          return;
+        }
         transport = new NodeStreamableHTTPServerTransport({
+          maxRequestBodySize: config.maxRequestBodySize,
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id) => {
             transports[id] = transport!;
+            activity.set(id, { lastSeen: Date.now(), open: 0 });
           },
           enableDnsRebindingProtection: true,
           allowedHosts,
           allowedOrigins,
         });
         transport.onclose = () => {
-          if (transport!.sessionId) delete transports[transport!.sessionId];
+          const id = transport!.sessionId;
+          if (id) {
+            delete transports[id];
+            activity.delete(id);
+          }
         };
         const server = createServer();
         await server.connect(transport);
+      } else if (sessionId) {
+        await sessionNotFound(req, res);
+        return;
       } else {
         await sendJsonRpcError(req, res, 400, -32000, "Bad Request: no valid session ID");
         return;
@@ -368,18 +461,29 @@ export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
     await transport.handleRequest(req, res, body);
   }
 
+  /**
+   * An id this process doesn't know: closed for idling, evicted at the cap,
+   * ended by DELETE, or minted before a restart. The spec's answer is 404,
+   * which tells a 2025-era client to initialize a new session; a 400 reads
+   * as a broken request and the client gives up.
+   */
+  async function sessionNotFound(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    await sendJsonRpcError(req, res, 404, -32001, "Session not found");
+  }
+
   log.info(
     `${CONFIG.serverName} v${CONFIG.serverVersion} running on http://${config.host}:${port}/mcp`
   );
   if (!config.authToken && !isLoopbackHost(config.host)) {
     log.warning(
-      "WARNING: HTTP endpoint bound to a non-loopback host without MCP_AUTH_TOKEN — anyone who can reach it acts as your NOTION_TOKEN. Set MCP_AUTH_TOKEN."
+      "WARNING: MCP_ALLOW_UNAUTHENTICATED is set and HOST is not loopback — /mcp takes no Authorization header, so whatever sits in front of it must authenticate every request."
     );
   }
   logAccessSummary();
   verifyNotionAuth();
 
   const close = async (): Promise<void> => {
+    clearInterval(sweep);
     // Best effort, but waited for: a session whose stream is still flushing
     // would otherwise be cut off by closeAllConnections below.
     await Promise.allSettled(Object.values(transports).map((t) => t.close()));
